@@ -72,6 +72,7 @@ Act :: enum {
 	None, Open, Back, Forward, Up, Home, Navigate, Path_Edit, Search, View_Grid, View_List,
 	Main_Menu, Context, Copy, Cut, Paste, Rename, Trash, Delete, Restore, Mkdir, Select_All,
 	Terminal, Hidden, Reload, Empty_Trash, Sort, Dialog_Ok, Dialog_Cancel, Close, Extract, Compress,
+	New_Tab, Close_Tab, Switch_Tab, Next_Tab, Convert, Preview,
 }
 
 Pending :: struct {
@@ -105,7 +106,16 @@ Menu_Item :: struct {
 	ok:    bool,
 }
 
+Tab :: struct {
+	cwd:       string,
+	back, fwd: [dynamic]string,
+	scroll:    f32,
+}
+
 App :: struct {
+	tabs:              [dynamic]Tab, // the current tab's fields live in App; tabs[cur_tab] is refreshed on switch
+	cur_tab:           int,
+	tab_x:             f32, // animated position of the active-tab highlight
 	ime_rect:          [4]i32,
 	text_clip:         string,
 	S:                 f32,
@@ -113,6 +123,12 @@ App :: struct {
 	home, trash_files: string,
 	cwd:               string,
 	listing:           virtual.Arena,
+	// recursive search: results are appended after the base listing
+	search_arena:      virtual.Arena,
+	base_count:        int,
+	walk_stack:        [dynamic]string,
+	walk_q:            string,
+	walking:           bool,
 	entries:           [dynamic]Entry,
 	view:              [dynamic]int,
 	back, fwd:         [dynamic]string,
@@ -151,6 +167,9 @@ App :: struct {
 	wheel:             f32,
 	mod:               Mods,
 	band_on:           bool,
+	cdrag_on:          bool, // Ctrl held on an item: a drag opens the convert donut
+	cdrag_x, cdrag_y:  f32,
+	cdrag_toggle:      int, // entry to deselect if it turns out to be a plain Ctrl+click
 	band_x, band_y:    f32,
 	blocked:           bool,
 	hdr_hot:           [dynamic]Rect,
@@ -238,6 +257,7 @@ load :: proc(path: string) -> bool {
 		return false
 	}
 	virtual.arena_free_all(&app.listing)
+	stop_walk()
 	clear(&app.entries)
 	a := virtual.arena_allocator(&app.listing)
 	for fi in infos {
@@ -252,6 +272,7 @@ load :: proc(path: string) -> bool {
 		e.kind = kind_of(fi.name, fi.mode)
 		append(&app.entries, e)
 	}
+	app.base_count = len(app.entries)
 	return true
 }
 
@@ -295,9 +316,11 @@ entry_less :: proc(x, y: int) -> bool {
 refilter :: proc() {
 	clear(&app.view)
 	q := strings.to_lower(edit_str(&app.search), context.temp_allocator) if app.searching else ""
+	if q != app.walk_q do start_walk(q)
 	for e, i in app.entries {
+		if i >= app.base_count && q == "" do break
 		if !app.show_hidden && e.hidden do continue
-		if q != "" && !strings.contains(strings.to_lower(e.name, context.temp_allocator), q) do continue
+		if q != "" && !strings.contains(strings.to_lower(filepath.base(e.name), context.temp_allocator), q) do continue
 		append(&app.view, i)
 	}
 	slice.sort_by(app.view[:], entry_less)
@@ -430,24 +453,29 @@ unique_dest :: proc(dir, name: string) -> string {
 }
 
 do_paste :: proc() {
-	if len(app.clip) == 0 {
+	srcs, cut := app.clip[:], app.clip_cut
+	external := false
+	if !plat_clipboard_is_ours() {
+		if ext, ext_cut, ok := plat_get_clipboard_files(); ok do srcs, cut, external = ext[:], ext_cut, true
+	}
+	if len(srcs) == 0 {
 		toastf("クリップボードは空です")
 		return
 	}
 	done, failed := 0, 0
 	last_err: gf.OperationStatus
-	for src in app.clip {
-		if app.clip_cut && filepath.dir(src) == app.cwd do continue
+	for src in srcs {
+		if cut && filepath.dir(src) == app.cwd do continue
 		if strings.has_prefix(app.cwd, src) && (len(app.cwd) == len(src) || app.cwd[len(src)] == '/') {
 			toastf("フォルダーをそれ自身の中には貼り付けできません")
 			return
 		}
 		dst := unique_dest(app.cwd, filepath.base(src))
-		st := gf.move_file(src, dst) if app.clip_cut else gf.copy_file(src, dst)
+		st := gf.move_file(src, dst) if cut else gf.copy_file(src, dst)
 		if st == .Success do done += 1
 		else {failed += 1; last_err = st}
 	}
-	if app.clip_cut {
+	if cut && !external {
 		for s in app.clip do delete(s)
 		clear(&app.clip)
 	}
@@ -462,6 +490,7 @@ clip_selection :: proc(cut: bool) {
 	clear(&app.clip)
 	for vi in sel do append(&app.clip, strings.clone(full_path(app.entries[vi].name)))
 	app.clip_cut = cut
+	plat_set_clipboard_files(app.clip[:], cut)
 	n := len(sel)
 	if n == 1 do toastf("「%s」を%sしました", app.entries[sel[0]].name, "切り取り" if cut else "コピー")
 	else do toastf("%d 個のアイテムを%sしました", n, "切り取り" if cut else "コピー")
@@ -528,12 +557,12 @@ open_terminal :: proc() {
 	toastf("端末が見つかりません")
 }
 
-name_problem :: proc(name: string, allow := "") -> string {
+name_problem :: proc(name: string, allow := "", dir := "") -> string {
 	if name == "" do return " "
 	if strings.contains_rune(name, '/') do return "名前に「/」は使えません"
 	if name == "." || name == ".." do return "その名前は使えません"
 	if name != allow {
-		if p, _ := filepath.join({app.cwd, name}, context.temp_allocator); os.exists(p) do return "同じ名前のアイテムが既にあります"
+		if p, _ := filepath.join({app.cwd, dir, name}, context.temp_allocator); os.exists(p) do return "同じ名前のアイテムが既にあります"
 	}
 	if strings.has_prefix(name, ".") && !strings.has_prefix(allow, ".") do return "" // allowed, will be hidden
 	return ""
@@ -544,8 +573,10 @@ dialog_ok :: proc() {
 	case .Rename:
 		vi := app.dialog_target
 		old := app.entries[vi].name
+		dir := filepath.dir(old) if strings.contains_rune(old, '/') else "" // search result in a subfolder
 		name := strings.trim_space(edit_str(&app.dlg_edit))
-		if name_problem(name, old) != "" do return
+		if name_problem(name, filepath.base(old), dir) != "" do return
+		if dir != "" do name, _ = filepath.join({dir, name}, context.temp_allocator)
 		if name != old {
 			if st := gf.rename_path(full_path(old), full_path(name)); st != .Success {
 				toastf("名前を変更できません: %s", status_text(st))
@@ -600,10 +631,11 @@ begin_rename :: proc() {
 	e := app.entries[sel[0]]
 	app.dialog = .Rename
 	app.dialog_target = sel[0]
-	edit_set(&app.dlg_edit, e.name)
+	base := filepath.base(e.name)
+	edit_set(&app.dlg_edit, base)
 	// select the name without its extension, like GNOME
-	ext := filepath.ext(e.name)
-	if !e.is_dir && ext != "" && len(ext) < len(e.name) do app.dlg_edit.cur = len(e.name) - len(ext)
+	ext := filepath.ext(base)
+	if !e.is_dir && ext != "" && len(ext) < len(base) do app.dlg_edit.cur = len(base) - len(ext)
 	app.dlg_edit.anchor = 0
 	app.edit_focus = .Dialog
 }
@@ -689,6 +721,33 @@ run_pending :: proc() {
 			app.dialog = .None
 			if app.edit_focus == .Dialog do app.edit_focus = .None
 		case .Close:     app.running = false
+		case .New_Tab:
+			path := p.s
+			if path == "" {
+				sel := selection()
+				path = app.cwd
+				if len(sel) == 1 && app.entries[sel[0]].is_dir && p.i == -1 do path = full_path(app.entries[sel[0]].name)
+			}
+			new_tab(path)
+		case .Close_Tab:  close_tab(p.i if p.i >= 0 else app.cur_tab)
+		case .Switch_Tab: if p.i != app.cur_tab {save_tab(); activate_tab(p.i)}
+		case .Convert:
+			x, y := app.menu_pos.x, app.menu_pos.y
+			if p.i != -1 do x, y = app.body.x + app.body.w / 2, app.body.y + app.body.h / 2
+			donut_open(x, y, false)
+		case .Preview:
+			sel := selection()
+			k := app.focus
+			if len(sel) > 0 && (k < 0 || !app.entries[app.view[k]].sel) {
+				for vi2, j in app.view do if vi2 == sel[0] {k = j; break}
+			}
+			if k < 0 && len(app.view) > 0 do k = 0
+			preview_open(k)
+		case .Next_Tab:
+			if len(app.tabs) > 1 {
+				save_tab()
+				activate_tab((app.cur_tab + p.i + len(app.tabs)) % len(app.tabs))
+			}
 		case .Extract:   for vi in selection() do extract(vi)
 		case .Compress:
 			sel := selection()
@@ -728,9 +787,12 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("完全に削除…", .Delete, "Delete")
 	} else if vi >= 0 {
 		add("開く", .Open, "Enter")
+		if n == 1 && app.entries[vi].is_dir do add("新しいタブで開く", .New_Tab, "中クリック")
 		if n == 1 {
 			if _, _, ok := archive_kind(app.entries[vi].name); ok do add("ここに展開", .Extract)
 		}
+		if cat_of(app.entries[vi].name) != .None do add("変換…", .Convert, "Ctrl+ドラッグ")
+		add("プレビュー", .Preview, "Space")
 		add("圧縮…", .Compress)
 		sep()
 		add("切り取り", .Cut, "Ctrl+X")
@@ -744,7 +806,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("ゴミ箱を空にする", .Empty_Trash, "", len(app.view) > 0)
 	} else {
 		add("新しいフォルダー…", .Mkdir, "Shift+Ctrl+N")
-		add("貼り付け", .Paste, "Ctrl+V", len(app.clip) > 0)
+		add("貼り付け", .Paste, "Ctrl+V")
 		add("すべて選択", .Select_All, "Ctrl+A")
 		sep()
 		add("端末で開く", .Terminal)
@@ -1024,8 +1086,18 @@ frame :: proc() {
 	clear_canvas(BG)
 	clear(&app.hdr_hot)
 	app.header_h = px(47)
-	app.blocked = app.menu_open || app.dialog != .None
+	app.blocked = app.menu_open || app.dialog != .None || pv.open || dn.open
 	if app.released do app.band_on = false
+	if app.cdrag_on {
+		if app.released {
+			if app.cdrag_toggle >= 0 && app.cdrag_toggle < len(app.entries) do app.entries[app.cdrag_toggle].sel = false
+			app.cdrag_on = false
+		} else if app.held && math.hypot(app.mx - app.cdrag_x, app.my - app.cdrag_y) > px(8) {
+			app.cdrag_on = false
+			donut_open(app.mx, app.my, true)
+			app.blocked = true
+		}
+	}
 
 	sidebar_w := px(220) if W > px(640) else 0
 	if sidebar_w > 0 do draw_sidebar(sidebar_w, H)
@@ -1034,12 +1106,19 @@ frame :: proc() {
 	draw_header({cx, 0, W - cx, app.header_h})
 	fill({cx, app.header_h - 1, W - cx, 1}, LINE)
 
-	app.body = {cx, app.header_h, W - cx, H - app.header_h}
+	top := app.header_h
+	if len(app.tabs) > 1 {
+		draw_tabbar({cx, top, W - cx, px(38)})
+		top += px(38)
+	}
+	app.body = {cx, top, W - cx, H - top}
 	draw_body()
 
 	app.blocked = false
 	if app.menu_open do draw_menu()
 	if app.dialog != .None do draw_dialog(W, H)
+	draw_preview(W, H)
+	draw_donut()
 	draw_toast(W, H)
 }
 
@@ -1068,6 +1147,7 @@ draw_sidebar :: proc(w, H: f32) {
 		glyph_center({r.x + px(6), r.y, px(28), r.h}, p.icon, fs(15), FG)
 		text(r.x + px(42), baseline(r, fs(14)), ellipsize(p.label, fs(14), r.w - px(50)), fs(14), FG, active)
 		if clicked(r) do push(.Navigate, i, p.path)
+		if hovering(r) && app.pressed && app.button == 2 do push(.New_Tab, 0, p.path)
 		y += px(38)
 	}
 }
@@ -1094,7 +1174,7 @@ draw_header :: proc(r: Rect) {
 	if icon_button({right, y, bs, bs}, I_LIST if app.grid else I_GRID) do push(.View_List if app.grid else .View_Grid)
 	right -= bs + px(2)
 	if icon_button({right, y, bs, bs}, I_SEARCH, app.searching) do push(.Search)
-	if len(jobs) > 0 {
+	if len(jobs) > 0 || app.walking {
 		right -= bs + px(2)
 		cx, cy := right + bs / 2, y + bs / 2
 		head := int(app.now * 12) % 8
@@ -1273,9 +1353,10 @@ draw_body :: proc() {
 			ix, iy := r.x + (r.w - is) / 2, r.y + px(8)
 			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)))
 			else do file_icon(ix, iy, is, e.kind)
+			if len(jobs) > 0 && converting(e.name) do progress_ring({ix, iy, is, is})
 			if e.is_link do glyph_center({ix + is - px(20), iy + is - px(20), px(20), px(20)}, I_LINK, fs(12), FG)
 			size := fs(14)
-			l1, l2 := wrap2(e.name, size, hit.w - px(8))
+			l1, l2 := wrap2(filepath.base(e.name), size, hit.w - px(8))
 			ty := iy + is + px(20)
 			text(r.x + (r.w - f32(text_width(l1, size))) / 2, ty, l1, size, col)
 			if l2 != "" do text(r.x + (r.w - f32(text_width(l2, size))) / 2, ty + px(18), l2, size, col)
@@ -1284,11 +1365,15 @@ draw_body :: proc() {
 			ix, iy := r.x + px(16), r.y + (r.h - is) / 2
 			if e.is_dir do folder_icon(ix, iy, is)
 			else do file_icon(ix, iy, is, e.kind)
+			if len(jobs) > 0 && converting(e.name) do progress_ring({ix, iy, is, is})
 			size := fs(14)
 			bl := baseline(r, size)
 			date_w, size_w := px(150), px(100)
 			name_w := r.w - px(60) - date_w - size_w - px(16)
-			text(r.x + px(56), bl, ellipsize(e.name, size, name_w, false, true), size, col)
+			nw := text(r.x + px(56), bl, ellipsize(filepath.base(e.name), size, name_w, false, true), size, col)
+			if strings.contains_rune(e.name, '/') && nw < name_w - px(40) { // search hit in a subfolder
+				text(r.x + px(66) + nw, bl, ellipsize(filepath.dir(e.name), fs(12), name_w - nw - px(12), false, true), fs(12), with_alpha(FG, 110))
+			}
 			sz := "—" if e.is_dir else format_size(e.size)
 			sx := r.x + r.w - date_w - px(16) - f32(text_width(sz, size))
 			text(sx, bl, sz, size, DIM)
@@ -1300,7 +1385,10 @@ draw_body :: proc() {
 			shift := .Shift in app.mod
 			if app.button == 1 {
 				if ctrl {
-					e.sel = !e.sel
+					// deselect on release only: a Ctrl+drag of a selection must keep it selected
+					app.cdrag_toggle = vi if e.sel else -1
+					e.sel = true
+					app.cdrag_on, app.cdrag_x, app.cdrag_y = true, app.mx, app.my
 					app.anchor = k
 				} else if shift && app.anchor >= 0 {
 					clear_sel()
@@ -1319,6 +1407,8 @@ draw_body :: proc() {
 				if !e.sel {clear_sel(); e.sel = true; app.anchor = k}
 				app.focus = k
 				push(.Context, vi)
+			} else if app.button == 2 && e.is_dir {
+				push(.New_Tab, 0, full_path(e.name))
 			}
 		}
 	}
@@ -1467,7 +1557,7 @@ draw_dialog :: proc(W, H: f32) {
 		e := app.entries[app.dialog_target]
 		title = "フォルダー名の変更" if e.is_dir else "ファイル名の変更"
 		ok = "名前を変更"
-		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)), e.name)
+		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)), filepath.base(e.name), filepath.dir(e.name) if strings.contains_rune(e.name, '/') else "")
 	case .Compress:
 		title, ok = "圧縮（.zip / .tar.gz / .tar.xz / .7z）", "作成"
 		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)))
@@ -1521,7 +1611,7 @@ draw_toast :: proc(W, H: f32) {
 
 // Window move/resize from the client-drawn header and edges (no server decorations).
 window_grab :: proc(x, y: f32) -> bool {
-	if app.menu_open || app.dialog != .None do return false
+	if app.menu_open || app.dialog != .None || pv.open || dn.open do return false
 	W, H, e := f32(cv.w), f32(cv.h), px(5)
 	left, right, top, bottom := x < e, x > W - e, y < e, y > H - e
 	edge: Maybe(Edge)
@@ -1568,6 +1658,21 @@ on_key :: proc(ev: Ev) {
 	key := ev.key
 	ctrl, shift, alt := .Ctrl in ev.mods, .Shift in ev.mods, .Alt in ev.mods
 
+	if dn.open {
+		if !dn.closing do donut_key(key)
+		return
+	}
+	if pv.open {
+		cols := app.cols if app.grid else 1
+		switch key {
+		case K_SPACE, K_ESCAPE: preview_close()
+		case K_LEFT:            preview_step(-1)
+		case K_RIGHT:           preview_step(1)
+		case K_UP:              preview_step(-cols)
+		case K_DOWN:            preview_step(cols)
+		}
+		return
+	}
 	if app.menu_open {
 		if key == K_ESCAPE do app.menu_open = false
 		return
@@ -1636,7 +1741,11 @@ on_key :: proc(ev: Ev) {
 	case ctrl && key == K_V: push(.Paste)
 	case ctrl && shift && key == K_N: push(.Mkdir)
 	case ctrl && key == K_R: push(.Reload)
-	case ctrl && (key == K_W || key == K_Q): push(.Close)
+	case ctrl && key == K_Q: push(.Close)
+	case ctrl && key == K_W: push(.Close_Tab, app.cur_tab)
+	case ctrl && key == K_T: push(.New_Tab)
+	case ctrl && (key == K_TAB || key == K_PAGEDOWN): push(.Next_Tab, 1)
+	case ctrl && (key == K_ISO_LEFT_TAB || key == K_PAGEUP): push(.Next_Tab, -1)
 	case key == K_F5: push(.Reload)
 	case key == K_F2: push(.Rename)
 	case key == K_DELETE && shift: push(.Delete)
@@ -1660,6 +1769,8 @@ on_key :: proc(ev: Ev) {
 		app.mx, app.my = app.body.x + app.body.w / 3, app.body.y + app.body.h / 3
 		sel := selection()
 		push(.Context, sel[0] if len(sel) > 0 else -1)
+	case key == K_SPACE && !ctrl && !alt: push(.Preview)
+	case ctrl && key == K_E: push(.Convert)
 	case !ctrl && !alt && ev.text != "":
 		// type-ahead search like GNOME Files
 		edit_set(&app.search, ev.text)
@@ -1788,6 +1899,7 @@ main :: proc() {
 	app.running = true
 	app.S = 1
 	build_places()
+	append(&app.tabs, Tab{})
 
 	start := app.home
 	if len(os.args) > 1 {
@@ -1798,8 +1910,13 @@ main :: proc() {
 	if !go_to(start) do go_to(app.home)
 	dump_path := os.get_env("GF_DUMP", context.allocator)
 
+
 	dirty, urgent := true, false
 	for app.running && !plat_closed() {
+		if app.walking {
+			if step_walk() do refilter()
+			dirty = true
+		}
 		// clicks/keys draw at once; hover/scroll wait for the compositor's frame callback
 		if dirty && (urgent || plat_can_draw()) {
 			buf, bw, bh := plat_begin()
@@ -1829,6 +1946,7 @@ main :: proc() {
 		if app.toast != "" && app.toast_until > ticks_ms() do timeout = int(app.toast_until - ticks_ms()) + 10
 		if dirty do timeout = 16 // waiting for the compositor to release a buffer
 		if len(jobs) > 0 && (timeout < 0 || timeout > 100) do timeout = 100 // poll children + spinner
+		if app.walking do timeout = 0 // keep searching between events
 		alive, redraw, timed_out := plat_wait(timeout)
 		if !alive do break
 		if reap_jobs() && app.dialog == .None do reload()
@@ -1849,4 +1967,156 @@ main :: proc() {
 		}
 		remove_range(&events, 0, n)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+
+save_tab :: proc() {
+	t := &app.tabs[app.cur_tab]
+	delete(t.cwd)
+	t.cwd = strings.clone(app.cwd)
+	t.back, t.fwd, t.scroll = app.back, app.fwd, app.scroll_to
+}
+
+// Makes tab i current. The previous tab must have been saved (or freed) first.
+activate_tab :: proc(i: int) {
+	t := &app.tabs[i]
+	app.cur_tab = i
+	app.back, app.fwd = t.back, t.fwd
+	app.searching = false
+	if app.edit_focus == .Search || app.edit_focus == .Path do app.edit_focus = .None
+	if !go_to(t.cwd, .Replace) do go_to(app.home, .Replace)
+	app.scroll_to = t.scroll
+	app.nav_t0, app.nav_dir = now_s(), 0
+}
+
+new_tab :: proc(path: string) {
+	save_tab()
+	append(&app.tabs, Tab{cwd = strings.clone(path)})
+	activate_tab(len(app.tabs) - 1)
+}
+
+close_tab :: proc(i: int) {
+	if len(app.tabs) <= 1 {
+		app.running = false
+		return
+	}
+	free_history :: proc(back, fwd: ^[dynamic]string) {
+		for s in back do delete(s)
+		for s in fwd do delete(s)
+		delete(back^)
+		delete(fwd^)
+	}
+	t := &app.tabs[i]
+	if i == app.cur_tab do free_history(&app.back, &app.fwd) // the live copies are the real ones
+	else do free_history(&t.back, &t.fwd)
+	delete(t.cwd)
+	ordered_remove(&app.tabs, i)
+	if i < app.cur_tab {
+		app.cur_tab -= 1
+	} else if i == app.cur_tab {
+		activate_tab(min(i, len(app.tabs) - 1))
+	}
+}
+
+tab_title :: proc(i: int) -> string {
+	if i == app.cur_tab do return location_name()
+	c := app.tabs[i].cwd
+	if c == app.trash_files do return "ゴミ箱"
+	if c == app.home do return "ホーム"
+	return filepath.base(c)
+}
+
+draw_tabbar :: proc(r: Rect) {
+	fill({r.x, r.y + r.h - 1, r.w, 1}, LINE)
+	n := len(app.tabs)
+	tw := min(px(240), (r.w - px(12)) / f32(n))
+	x0 := r.x + px(6)
+	target := x0 + f32(app.cur_tab) * tw
+	if app.tab_x == 0 do app.tab_x = target
+	if d := target - app.tab_x; abs(d) > 0.5 {
+		app.tab_x += d * (1 - math.exp(-app.dt * 18))
+		app.animating = true
+	} else do app.tab_x = target
+	rrect({app.tab_x + px(2), r.y + px(4), tw - px(4), r.h - px(9)}, px(7), ACTIVE)
+	size := fs(13)
+	for i in 0 ..< n {
+		tr := Rect{x0 + f32(i) * tw + px(2), r.y + px(4), tw - px(4), r.h - px(9)}
+		hov := hovering(tr)
+		if hov && i != app.cur_tab do rrect(tr, px(7), HOVER)
+		title := ellipsize(tab_title(i), size, tr.w - px(44), i == app.cur_tab)
+		ttw := f32(text_width(title, size, i == app.cur_tab))
+		text(tr.x + (tr.w - ttw) / 2, baseline(tr, size), title, size, FG if i == app.cur_tab else DIM, i == app.cur_tab)
+		cr := Rect{tr.x + tr.w - px(28), tr.y + (tr.h - px(22)) / 2, px(22), px(22)}
+		if hov || i == app.cur_tab {
+			if hovering(cr) do rrect(cr, px(11), HOVER)
+			glyph_center(cr, I_CLOSE, fs(10), DIM)
+		}
+		switch {
+		case clicked(cr) && (hov || i == app.cur_tab): push(.Close_Tab, i)
+		case clicked(tr):                              push(.Switch_Tab, i)
+		case hov && app.pressed && app.button == 2:    push(.Close_Tab, i)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Recursive search: walks subfolders a few ms per frame so typing stays smooth
+
+MAX_SEARCH_RESULTS :: 5000
+
+stop_walk :: proc() {
+	virtual.arena_free_all(&app.search_arena)
+	app.walk_stack = {}
+	app.walk_q = ""
+	app.walking = false
+	app.base_count = len(app.entries)
+}
+
+start_walk :: proc(q: string) {
+	resize(&app.entries, app.base_count)
+	base := app.base_count
+	stop_walk()
+	app.base_count = base
+	if q == "" do return
+	a := virtual.arena_allocator(&app.search_arena)
+	app.walk_q = strings.clone(q, a)
+	app.walk_stack = make([dynamic]string, a)
+	for e in app.entries[:app.base_count] {
+		if e.is_dir && !e.is_link && (app.show_hidden || !e.hidden) do append(&app.walk_stack, e.name)
+	}
+	app.walking = len(app.walk_stack) > 0
+}
+
+// Returns true if new results were added.
+step_walk :: proc(budget_ms: i64 = 6) -> bool {
+	a := virtual.arena_allocator(&app.search_arena)
+	t0 := ticks_ms()
+	added := false
+	for len(app.walk_stack) > 0 && ticks_ms() - t0 < budget_ms {
+		if len(app.entries) - app.base_count >= MAX_SEARCH_RESULTS {
+			clear(&app.walk_stack)
+			break
+		}
+		rel := pop(&app.walk_stack)
+		infos, err := os.read_all_directory_by_path(full_path(rel), context.temp_allocator)
+		if err != nil do continue
+		for fi in infos {
+			hidden := strings.has_prefix(fi.name, ".")
+			if hidden && !app.show_hidden do continue
+			child, _ := filepath.join({rel, fi.name}, a)
+			is_dir := fi.type == .Directory
+			if is_dir do append(&app.walk_stack, child) // symlinks are not followed (no loops)
+			if strings.contains(strings.to_lower(fi.name, context.temp_allocator), app.walk_q) {
+				append(&app.entries, Entry {
+					name = child, size = fi.size, mtime = fi.modification_time._nsec / 1_000_000_000,
+					is_dir = is_dir, is_link = fi.type == .Symlink, hidden = hidden, kind = kind_of(fi.name, fi.mode),
+				})
+				added = true
+			}
+		}
+	}
+	app.walking = len(app.walk_stack) > 0
+	return added
 }

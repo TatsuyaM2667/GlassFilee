@@ -58,7 +58,6 @@ clear_canvas :: proc(c: Color) {
 	}
 }
 
-@(private = "file")
 blend :: #force_inline proc(p: ^u32, c: Color, cov: u32) {
 	a := (u32(c.a) * cov * draw_alpha + 32512) / 65025
 	if a == 0 do return
@@ -212,5 +211,34 @@ file_icon :: proc(x, y, s: f32, kind: Kind) {
 		glyph_center(band, KIND_GLYPH[kind], i32(0.26 * s), hex(KIND_COLOR[kind]))
 	} else {
 		rrect(shrink(band, 0.08 * s), 0.03 * s, hex(KIND_COLOR[kind]))
+	}
+}
+
+// Anti-aliased ring sector between radii r0..r1 and angles a0..a1 (radians, clockwise from +x).
+ring_seg :: proc(cx, cy, r0, r1, a0, a1: f32, c: Color) {
+	x0 := max(i32(cx - r1 - 1), cv.clip[0])
+	y0 := max(i32(cy - r1 - 1), cv.clip[1])
+	x1 := min(i32(cx + r1 + 2), cv.clip[2])
+	y1 := min(i32(cy + r1 + 2), cv.clip[3])
+	full := a1 - a0 >= 2 * math.PI - 0.001
+	mid := (a0 + a1) / 2
+	half := (a1 - a0) / 2
+	for y in y0 ..< y1 {
+		dy := f32(y) + 0.5 - cy
+		for x in x0 ..< x1 {
+			dx := f32(x) + 0.5 - cx
+			d := math.sqrt(dx * dx + dy * dy)
+			cov := clamp(d - r0 + 0.5, 0, 1) * clamp(r1 - d + 0.5, 0, 1)
+			if cov <= 0 do continue
+			if !full {
+				// angular distance to the sector, converted to px along the arc for AA
+				da := math.atan2(dy, dx) - mid
+				for da > math.PI do da -= 2 * math.PI
+				for da < -math.PI do da += 2 * math.PI
+				cov *= clamp((half - abs(da)) * d + 0.5, 0, 1)
+				if cov <= 0 do continue
+			}
+			blend(&cv.px[y * cv.stride + x], c, u32(cov * 255))
+		}
 	}
 }

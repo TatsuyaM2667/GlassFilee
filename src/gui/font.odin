@@ -89,7 +89,7 @@ Glyph :: struct {
 @(private = "file") face_size: map[FT_Face]i32
 @(private = "file") cache: map[u64]Glyph
 
-// shortcut: fixed font paths instead of fontconfig; add paths here for other distros
+// Known paths first (no fontconfig startup cost); fc-match is the fallback.
 UI_FONTS :: []string {
 	"/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
 	"/usr/share/fonts/adwaita-sans-fonts/AdwaitaSans-Regular.ttf",
@@ -97,12 +97,17 @@ UI_FONTS :: []string {
 	"/usr/share/fonts/noto/NotoSans-Regular.ttf",
 	"/usr/share/fonts/TTF/DejaVuSans.ttf",
 	"/usr/share/fonts/dejavu/DejaVuSans.ttf",
+	"/usr/local/share/fonts/adwaita/AdwaitaSans-Regular.ttf",
+	"/usr/local/share/fonts/noto/NotoSans-Regular.ttf",
+	"/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
 }
 CJK_FONTS :: []string {
 	"/usr/share/fonts/noto/NotoSansCJKjp-Regular.otf",
 	"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 	"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 	"/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+	"/usr/local/share/fonts/noto/NotoSansCJK-Regular.ttc",
+	"/usr/local/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 }
 CJK_BOLD_FONTS :: []string {
 	"/usr/share/fonts/noto/NotoSansCJKjp-Bold.otf",
@@ -113,6 +118,8 @@ ICON_FONTS :: []string {
 	"/usr/share/fonts/nerd-symbols-only/SymbolsNerdFont-Regular.ttf",
 	"/usr/share/fonts/TTF/SymbolsNerdFont-Regular.ttf",
 	"/usr/share/fonts/nerd-fonts/SymbolsNerdFont-Regular.ttf",
+	"/usr/share/fonts/TTF/SymbolsNerdFontMono-Regular.ttf",
+	"/usr/local/share/fonts/nerd-fonts-symbols/SymbolsNerdFont-Regular.ttf",
 }
 
 @(private = "file")
@@ -128,6 +135,9 @@ open_first :: proc(paths: []string) -> FT_Face {
 font_init :: proc() -> bool {
 	if FT_Init_FreeType(&lib) != 0 do return false
 	chain[0] = {open_first(UI_FONTS), open_first(CJK_FONTS), open_first(ICON_FONTS)}
+	if chain[0][0] == nil do chain[0][0] = fc_match("sans-serif")
+	if chain[0][1] == nil do chain[0][1] = fc_match("sans-serif:lang=ja")
+	if chain[0][2] == nil do chain[0][2] = fc_match("Symbols Nerd Font")
 	bold_ui := open_first(UI_FONTS)
 	if bold_ui != nil {
 		// variable font: wght axis -> 700 (ignored by static fonts)
@@ -137,6 +147,13 @@ font_init :: proc() -> bool {
 	bold_cjk := open_first(CJK_BOLD_FONTS)
 	chain[1] = {bold_ui, bold_cjk if bold_cjk != nil else chain[0][1], chain[0][2]}
 	return chain[0][0] != nil || chain[0][1] != nil
+}
+
+@(private = "file")
+fc_match :: proc(pattern: string) -> FT_Face {
+	_, out, _, err := os.process_exec({command = {"fc-match", "-f", "%{file}", pattern}}, context.temp_allocator)
+	if err != nil || len(out) == 0 do return nil
+	return open_first({string(out)})
 }
 
 @(private = "file")

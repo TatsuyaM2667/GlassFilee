@@ -63,11 +63,16 @@ cd AmeFileManger
 ./build.sh
 ```
 
-### Install (Chimera Linux etc.)
+### Install (Chimera Linux / Arch Linux / FreeBSD)
 
 ```bash
-./install.sh   # → ~/.local/bin/gf-gui + app launcher entry (glassfilee.desktop)
+./install.sh            # → ~/.local/bin/gf-gui, launcher entry, and default file manager
+NO_DEFAULT=1 ./install.sh   # keep your current default file manager
 ```
+
+- **Arch Linux**: `cd packaging/arch && makepkg -si` (needs `odin` from the extra repo)
+- **FreeBSD**: `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils` then `./install.sh`
+- Requires a recent Odin (dev-2026-08 or newer: the new `core:os` API).
 
 ### GUI
 
@@ -87,6 +92,15 @@ type-ahead search, open in terminal.
 Right-click an archive → **ここに展開** (zip, tar.gz/xz/zst/bz2/lz4, 7z, rar, iso, deb, rpm, …
 via bsdtar; single .gz/.xz/.zst/.bz2/.lz4 files via their tools), or select items → **圧縮…**
 (.zip / .tar.gz / .tar.xz / .7z by extension). Both run in the background.
+**Convert like Filee**: Ctrl+drag selected files (or right-click → 変換…, Ctrl+E) and a donut of
+formats swirls open at the cursor; drop on a slice. Output lands next to the original, with a
+progress ring on the icon. Engines are whatever is installed — ffmpeg (images/video/audio),
+pandoc (documents), LibreOffice (office → PDF), ImageMagick (image → PDF), bsdtar (archives).
+
+**Quick preview** (Space): images, video frames and text zoom out of the icon; ←/→ to browse.
+**Tabs** (Ctrl+T / Ctrl+W / Ctrl+Tab, middle-click a folder). **Search** also walks subfolders
+in the background. **Clipboard** is shared with other apps (GNOME/KDE/browser file copy & paste).
+
 Smooth scrolling and eased transitions (folder entry cascade, menus, dialogs, toasts) —
 frames are only drawn while something moves, so idle CPU stays at 0.
 
@@ -101,6 +115,9 @@ frames are only drawn while something moves, so idle CPU stays at 0.
 | Ctrl+Shift+N | New folder |
 | Ctrl+1 / Ctrl+2 | List / Icon view |
 | Ctrl+H | Show hidden files |
+| Space | Quick preview |
+| Ctrl+drag / Ctrl+E | Convert (donut menu) |
+| Ctrl+T / Ctrl+W / Ctrl+Tab | New / close / next tab |
 | Ctrl+A, F5, Ctrl+Q | Select all, Reload, Quit |
 
 Needs `bsdtar` (libarchive) for archives.

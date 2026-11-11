@@ -5,8 +5,8 @@ package main
 
 import "base:runtime"
 import "core:c"
+import "core:fmt"
 import "core:strings"
-import "core:sys/linux"
 import "core:sys/posix"
 import "core:time"
 
@@ -62,6 +62,10 @@ foreign wlc {
 	wl_keyboard_interface:   wl_interface
 	wl_registry_interface:   wl_interface
 	wl_callback_interface:   wl_interface
+	wl_data_device_manager_interface: wl_interface
+	wl_data_device_interface: wl_interface
+	wl_data_source_interface: wl_interface
+	wl_data_offer_interface:  wl_interface
 
 	wl_display_connect :: proc(name: cstring) -> Proxy ---
 	wl_display_get_fd :: proc(d: Proxy) -> c.int ---
@@ -101,6 +105,12 @@ foreign xkbc {
 // xkb keysyms used by the app
 K_BACKSPACE :: 0xff08
 K_TAB :: 0xff09
+K_ISO_LEFT_TAB :: 0xfe20
+K_PAGEUP :: 0xff55
+K_PAGEDOWN :: 0xff56
+K_T :: 't'
+K_E :: 'e'
+K_SPACE :: ' '
 K_RETURN :: 0xff0d
 K_ESCAPE :: 0xff1b
 K_DELETE :: 0xffff
@@ -176,7 +186,13 @@ W :: struct {
 	frame_cb:                                     Proxy, // pending wl_surface.frame callback
 	// buffers
 	pool:                                         Proxy,
-	pool_fd:                                      linux.Fd,
+	pool_fd:                                      posix.FD,
+	// clipboard
+	ddm, ddev:                                    Proxy,
+	source:                                       Proxy, // our selection while we own it
+	source_payload:                               [3]string, // gnome, uri-list, text
+	sel_offer:                                    Proxy,
+	offer_mimes:                                  map[Proxy]u8, // 1 gnome-copied-files, 2 text/uri-list
 	pool_mem:                                     rawptr,
 	pool_size:                                    int,
 	buf_w, buf_h:                                 i32,
@@ -290,6 +306,8 @@ on_registry :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]
 		listen(w.wm, on_wm)
 	case "zwp_text_input_manager_v3":
 		w.ti_mgr = bind(name, &ti_mgr_iface, 1)
+	case "wl_data_device_manager":
+		w.ddm = bind(name, &wl_data_device_manager_interface, min(v, 3))
 	}
 	return 0
 }
@@ -440,13 +458,13 @@ on_keyboard :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]
 	context = runtime.default_context()
 	switch op {
 	case 0: // keymap
-		fd := linux.Fd(a[1].i)
+		fd := posix.FD(a[1].i)
 		size := uint(a[2].u)
-		defer linux.close(fd)
+		defer posix.close(fd)
 		if a[0].u != 1 do return 0
-		mem, err := linux.mmap(0, size, {.READ}, {.PRIVATE}, fd, 0)
-		if err != .NONE do return 0
-		defer linux.munmap(mem, size)
+		mem := posix.mmap(nil, size, {.READ}, {.PRIVATE}, fd, 0)
+		if mem == posix.MAP_FAILED do return 0
+		defer posix.munmap(mem, size)
 		if w.xkb_ctx == nil do w.xkb_ctx = xkb_context_new(0)
 		km := xkb_keymap_new_from_string(w.xkb_ctx, cstring(mem), 1, 0)
 		if km == nil do return 0
@@ -458,6 +476,7 @@ on_keyboard :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]
 	case 2: // leave
 		w.repeat_key = 0
 	case 3: // key
+		w.serial = a[0].u
 		code := a[2].u
 		if a[3].u == 1 {
 			emit_key(code)
@@ -556,7 +575,172 @@ plat_init :: proc(title, app_id: string, width, height: i32) -> bool {
 		if v := c.int(libc_atoi(s)); v > 0 do size = v
 	}
 	w.cursor_theme = wl_cursor_theme_load(posix.getenv("XCURSOR_THEME"), size, w.shm)
+	if w.ddm != nil && w.seat != nil {
+		w.ddev = wl_proxy_marshal_flags(w.ddm, 1, &wl_data_device_interface, ver(w.ddm), 0, rawptr(nil), w.seat)
+		listen(w.ddev, on_data_device)
+	}
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard (files, interoperable with GNOME/KDE/browsers)
+
+@(private = "file")
+on_data_device :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
+	context = runtime.default_context()
+	switch op {
+	case 0: // data_offer: new wl_data_offer, its mime types follow
+		if a[0].o != nil {
+			w.offer_mimes[a[0].o] = 0
+			listen(a[0].o, on_offer)
+		}
+	case 1: // enter (drag-and-drop): not supported, drop the offer
+		if a[4].o != nil do drop_offer(a[4].o) // enter(serial, surface, x, y, offer)
+	case 5: // selection
+		if w.sel_offer != nil && w.sel_offer != a[0].o do drop_offer(w.sel_offer)
+		w.sel_offer = a[0].o
+	}
+	return 0
+}
+
+@(private = "file")
+drop_offer :: proc(o: Proxy) {
+	delete_key(&w.offer_mimes, o)
+	wl_proxy_marshal_flags(o, 2, nil, ver(o), 1) // destroy (WL_MARSHAL_FLAG_DESTROY)
+}
+
+@(private = "file")
+on_offer :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
+	context = runtime.default_context()
+	if op == 0 {
+		switch string(a[0].s) {
+		case "x-special/gnome-copied-files": w.offer_mimes[target] |= 1
+		case "text/uri-list":                w.offer_mimes[target] |= 2
+		}
+	}
+	return 0
+}
+
+@(private = "file")
+on_source :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
+	context = runtime.default_context()
+	switch op {
+	case 1: // send(mime, fd)
+		fd := posix.FD(a[1].i)
+		data := w.source_payload[2]
+		switch string(a[0].s) {
+		case "x-special/gnome-copied-files": data = w.source_payload[0]
+		case "text/uri-list":                data = w.source_payload[1]
+		}
+		for len(data) > 0 {
+			n := posix.write(fd, raw_data(data), len(data))
+			if n <= 0 do break
+			data = data[n:]
+		}
+		posix.close(fd)
+	case 2: // cancelled: someone else owns the clipboard now
+		if target == w.source do w.source = nil
+		wl_proxy_marshal_flags(target, 1, nil, ver(target), 1)
+	}
+	return 0
+}
+
+file_uri :: proc(path: string, allocator := context.temp_allocator) -> string {
+	b := strings.builder_make(allocator)
+	strings.write_string(&b, "file://")
+	for i in 0 ..< len(path) {
+		ch := path[i]
+		switch ch {
+		case 'A' ..= 'Z', 'a' ..= 'z', '0' ..= '9', '-', '.', '_', '~', '/':
+			strings.write_byte(&b, ch)
+		case:
+			fmt.sbprintf(&b, "%%%02X", ch)
+		}
+	}
+	return strings.to_string(b)
+}
+
+// Publishes files to the system clipboard (copy or cut).
+plat_set_clipboard_files :: proc(paths: []string, cut: bool) {
+	if w.ddm == nil || w.ddev == nil do return
+	for s in w.source_payload do delete(s)
+	gnome := strings.builder_make()
+	uris := strings.builder_make()
+	text := strings.builder_make()
+	strings.write_string(&gnome, "cut" if cut else "copy")
+	for p, i in paths {
+		u := file_uri(p)
+		strings.write_byte(&gnome, '\n')
+		strings.write_string(&gnome, u)
+		fmt.sbprintf(&uris, "%s\r\n", u)
+		if i > 0 do strings.write_byte(&text, '\n')
+		strings.write_string(&text, p)
+	}
+	w.source_payload = {strings.to_string(gnome), strings.to_string(uris), strings.to_string(text)}
+	src := wl_proxy_marshal_flags(w.ddm, 0, &wl_data_source_interface, ver(w.ddm), 0, rawptr(nil))
+	listen(src, on_source)
+	for m in ([]cstring{"x-special/gnome-copied-files", "text/uri-list", "text/plain;charset=utf-8", "UTF8_STRING"}) {
+		wl_proxy_marshal_flags(src, 0, nil, ver(src), 0, m)
+	}
+	wl_proxy_marshal_flags(w.ddev, 1, nil, ver(w.ddev), 0, src, w.serial)
+	w.source = src
+}
+
+// True while the clipboard holds what we put there (use the in-app copy then).
+plat_clipboard_is_ours :: proc() -> bool {return w.source != nil}
+
+// Reads files from another app's clipboard. ok=false if it holds no files.
+plat_get_clipboard_files :: proc(allocator := context.temp_allocator) -> (paths: [dynamic]string, cut, ok: bool) {
+	o := w.sel_offer
+	if o == nil || w.source != nil do return
+	m := w.offer_mimes[o]
+	if m == 0 do return
+	mime: cstring = "x-special/gnome-copied-files" if m & 1 != 0 else "text/uri-list"
+	fds: [2]posix.FD
+	if posix.pipe(&fds) != .OK do return
+	wl_proxy_marshal_flags(o, 1, nil, ver(o), 0, mime, i32(fds[1]))
+	posix.close(fds[1])
+	wl_display_flush(w.display)
+	data := make([dynamic]u8, context.temp_allocator)
+	buf: [4096]u8
+	for {
+		pfd := posix.pollfd{fd = fds[0], events = {.IN}}
+		if posix.poll(&pfd, 1, 1000) <= 0 do break // the other app didn't answer in time
+		n := posix.read(fds[0], &buf[0], len(buf))
+		if n <= 0 do break
+		append(&data, ..buf[:n])
+	}
+	posix.close(fds[0])
+	paths = make([dynamic]string, allocator)
+	for line in strings.split_lines(string(data[:]), context.temp_allocator) {
+		l := strings.trim_space(line)
+		if l == "cut" do cut = true
+		if !strings.has_prefix(l, "file://") do continue
+		p := l[7:]
+		if i := strings.index_byte(p, '/'); i > 0 do p = p[i:] // file://host/path
+		append(&paths, url_decode(p, allocator))
+	}
+	return paths, cut, len(paths) > 0
+}
+
+@(private = "file")
+url_decode :: proc(s: string, allocator: runtime.Allocator) -> string {
+	b := strings.builder_make(allocator)
+	hexv :: proc(c: u8) -> int {
+		switch c {
+		case '0' ..= '9': return int(c - '0')
+		case 'a' ..= 'f': return int(c - 'a' + 10)
+		case 'A' ..= 'F': return int(c - 'A' + 10)
+		}
+		return -1
+	}
+	for i := 0; i < len(s); i += 1 {
+		if s[i] == '%' && i + 2 < len(s) && hexv(s[i + 1]) >= 0 && hexv(s[i + 2]) >= 0 {
+			strings.write_byte(&b, u8(hexv(s[i + 1]) * 16 + hexv(s[i + 2])))
+			i += 2
+		} else do strings.write_byte(&b, s[i])
+	}
+	return strings.to_string(b)
 }
 
 @(private = "file")
@@ -585,22 +769,25 @@ make_pool :: proc(bw, bh: i32) -> bool {
 	}
 	if w.pool != nil {
 		wl_proxy_marshal_flags(w.pool, 1, nil, 1, 0)
-		linux.munmap(w.pool_mem, uint(w.pool_size))
-		linux.close(w.pool_fd)
+		posix.munmap(w.pool_mem, uint(w.pool_size))
+		posix.close(w.pool_fd)
 		w.pool = nil
 	}
 	stride := bw * 4
 	one := int(stride * bh)
 	w.pool_size = one * 2
-	fd, err := linux.memfd_create("glassfilee", {.CLOEXEC})
-	if err != .NONE do return false
-	if linux.ftruncate(fd, i64(w.pool_size)) != .NONE {
-		linux.close(fd)
+	// POSIX shm (Linux + FreeBSD): create, unlink right away, keep only the fd
+	name := strings.clone_to_cstring(fmt.tprintf("/glassfilee-%d-%d", posix.getpid(), ticks_ms()), context.temp_allocator)
+	fd := posix.shm_open(name, {.RDWR, .CREAT, .EXCL, .CLOEXEC}, {.IRUSR, .IWUSR})
+	if fd < 0 do return false
+	posix.shm_unlink(name)
+	if posix.ftruncate(fd, posix.off_t(w.pool_size)) != .OK {
+		posix.close(fd)
 		return false
 	}
-	mem, merr := linux.mmap(0, uint(w.pool_size), {.READ, .WRITE}, {.SHARED}, fd, 0)
-	if merr != .NONE {
-		linux.close(fd)
+	mem := posix.mmap(nil, uint(w.pool_size), {.READ, .WRITE}, {.SHARED}, fd, 0)
+	if mem == posix.MAP_FAILED {
+		posix.close(fd)
 		return false
 	}
 	w.pool_fd, w.pool_mem = fd, mem

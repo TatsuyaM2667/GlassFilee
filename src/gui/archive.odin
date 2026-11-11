@@ -7,7 +7,6 @@ import "core:c"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import "core:sys/linux"
 import "core:sys/posix"
 
 // Longest suffixes first so ".tar.gz" wins over ".gz".
@@ -20,14 +19,15 @@ ARCHIVE_EXTS :: []string {
 SINGLE_EXTS :: [][2]string{{".gz", "gzip"}, {".z", "gzip"}, {".xz", "xz"}, {".lzma", "xz"}, {".zst", "zstd"}, {".bz2", "bzip2"}, {".lz4", "lz4"}}
 
 Job_Kind :: enum {
-	Extract, Decompress, Compress,
+	Extract, Decompress, Compress, Convert,
 }
 
 Job :: struct {
 	pid:   posix.pid_t,
 	kind:  Job_Kind,
 	label: string, // archive / output name for messages
-	dest:  string, // Extract: folder we created
+	dest:  string, // Extract: folder we created; Convert: output file
+	src:   string, // Convert: source name (for the progress ring)
 }
 
 jobs: [dynamic]Job
@@ -48,7 +48,9 @@ archive_kind :: proc(name: string) -> (stem: string, tool: string, ok: bool) {
 spawn :: proc(cmd: []string, dir := "") -> posix.pid_t {
 	p, err := os.process_start({command = cmd, working_dir = dir})
 	if err != nil do return 0
-	if p.handle != 0 && p.handle != ~uintptr(0) do linux.close(linux.Fd(p.handle))
+	when ODIN_OS == .Linux { // os.process_start opened a pidfd
+		if p.handle != 0 && p.handle != ~uintptr(0) do posix.close(posix.FD(p.handle))
+	}
 	return posix.pid_t(p.pid)
 }
 
@@ -138,12 +140,15 @@ reap_jobs :: proc() -> bool {
 			case .Decompress:
 				if ok do toastf("「%s」を展開しました", j.label)
 				else do toastf("「%s」を展開できませんでした", j.label)
-			case .Compress:
+			case .Compress, .Convert:
+				// the output name was new (unique_dest), so a failed run's leftover is ours to remove
+				if !ok && j.kind == .Convert do os.remove(j.dest)
 				if ok do toastf("「%s」を作成しました", j.label)
 				else do toastf("「%s」を作成できませんでした", j.label)
 			}
 			delete(j.label)
 			delete(j.dest)
+			delete(j.src)
 			ordered_remove(&jobs, i)
 			done = true
 			break

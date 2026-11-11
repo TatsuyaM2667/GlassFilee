@@ -42,7 +42,6 @@ rm -f zig-cache/libgfcore.a
 echo "[3/4] Building Odin core layer..."
 odin build src/core \
     -build-mode:static -no-entry-point \
-    -target:linux_amd64 \
     -out:zig-cache/libgfcore.a
 
 if [ ! -f "zig-cache/libgfcore.a" ]; then

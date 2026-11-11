@@ -12,7 +12,7 @@ odin-core:
 	@echo "Building Odin core layer..."
 	@mkdir -p zig-cache
 	rm -f zig-cache/libgfcore.a
-	odin build src/core -build-mode:static -no-entry-point -target:linux_amd64 -out:zig-cache/libgfcore.a
+	odin build src/core -build-mode:static -no-entry-point -out:zig-cache/libgfcore.a
 
 # Build CLI tool
 build: odin-core

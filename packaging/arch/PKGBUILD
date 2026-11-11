@@ -1,0 +1,35 @@
+# Maintainer: TatsuyaM2667
+pkgname=glassfilee-git
+pkgver=r0
+pkgrel=1
+pkgdesc="Translucent GNOME Files-style file manager in pure Odin (Wayland), with Filee-style conversion"
+arch=(x86_64 aarch64)
+url="https://github.com/TatsuyaM2667/GlassFilee"
+license=(MIT)
+depends=(wayland libxkbcommon freetype2 libarchive xdg-utils ttf-nerd-fonts-symbols noto-fonts-cjk)
+optdepends=('ffmpeg: image/video/audio conversion and previews'
+            'pandoc: document conversion'
+            'libreoffice-fresh: office → PDF'
+            'imagemagick: image → PDF'
+            'adwaita-fonts: GNOME look')
+makedepends=(odin git)
+provides=(glassfilee)
+source=("git+$url.git")
+sha256sums=(SKIP)
+
+pkgver() {
+    cd GlassFilee
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd GlassFilee
+    odin build src/gui -out:gf-gui -o:speed
+}
+
+package() {
+    cd GlassFilee
+    install -Dm755 gf-gui "$pkgdir/usr/bin/gf-gui"
+    install -Dm644 glassfilee.desktop "$pkgdir/usr/share/applications/glassfilee.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
