@@ -25,6 +25,8 @@ echo "✓ Unit tests passed"
 echo "  Running Odin trash tests (isolated XDG_DATA_HOME)..."
 GF_TEST_DIR="$(mktemp -d)" odin test tests/trash > /dev/null
 echo "✓ Trash tests passed"
+GF_TEST_DIR="$(mktemp -d)" odin test src/gui > /dev/null
+echo "✓ GUI archive tests passed"
 echo ""
 
 # Run integration tests

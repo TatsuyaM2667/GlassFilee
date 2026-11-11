@@ -84,6 +84,11 @@ Sidebar places, back/forward, breadcrumb path bar (click it or Ctrl+L to type a 
 icon/list views, sorting by name/size/date, rubber-band selection, right-click menus,
 trash with restore (freedesktop spec, shared with GNOME), rename/new-folder dialogs,
 type-ahead search, open in terminal.
+Right-click an archive → **ここに展開** (zip, tar.gz/xz/zst/bz2/lz4, 7z, rar, iso, deb, rpm, …
+via bsdtar; single .gz/.xz/.zst/.bz2/.lz4 files via their tools), or select items → **圧縮…**
+(.zip / .tar.gz / .tar.xz / .7z by extension). Both run in the background.
+Smooth scrolling and eased transitions (folder entry cascade, menus, dialogs, toasts) —
+frames are only drawn while something moves, so idle CPU stays at 0.
 
 | Key | Action |
 | --- | --- |
@@ -97,6 +102,8 @@ type-ahead search, open in terminal.
 | Ctrl+1 / Ctrl+2 | List / Icon view |
 | Ctrl+H | Show hidden files |
 | Ctrl+A, F5, Ctrl+Q | Select all, Reload, Quit |
+
+Needs `bsdtar` (libarchive) for archives.
 
 Requires a Wayland compositor with xdg-shell, plus libwayland, libxkbcommon, FreeType,
 and the Adwaita Sans / Noto Sans CJK / Symbols Nerd Font fonts.

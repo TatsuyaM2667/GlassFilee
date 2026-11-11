@@ -71,7 +71,7 @@ Place :: struct {
 Act :: enum {
 	None, Open, Back, Forward, Up, Home, Navigate, Path_Edit, Search, View_Grid, View_List,
 	Main_Menu, Context, Copy, Cut, Paste, Rename, Trash, Delete, Restore, Mkdir, Select_All,
-	Terminal, Hidden, Reload, Empty_Trash, Sort, Dialog_Ok, Dialog_Cancel, Close,
+	Terminal, Hidden, Reload, Empty_Trash, Sort, Dialog_Ok, Dialog_Cancel, Close, Extract, Compress,
 }
 
 Pending :: struct {
@@ -81,7 +81,7 @@ Pending :: struct {
 }
 
 Dialog :: enum {
-	None, Rename, Mkdir, Confirm_Delete, Confirm_Empty_Trash,
+	None, Rename, Mkdir, Compress, Confirm_Delete, Confirm_Empty_Trash,
 }
 
 Focus :: enum {
@@ -120,7 +120,14 @@ App :: struct {
 	grid, show_hidden: bool,
 	sort:              Sort_Key,
 	sort_desc:         bool,
-	scroll:            f32,
+	scroll, scroll_to: f32, // displayed / target (smooth scrolling)
+	now, dt, last_t:   f32,
+	animating:         bool, // something is still moving: keep drawing frames
+	nav_t0, nav_dir:   f32,
+	menu_t0, dlg_t0:   f32,
+	toast_t0:          f32,
+	prev_dialog:       Dialog,
+	prev_menu:         bool,
 	focus, anchor:     int,
 	edit_focus:        Focus,
 	path_edit, search: Edit,
@@ -167,6 +174,21 @@ toastf :: proc(format: string, args: ..any) {
 	delete(app.toast)
 	app.toast = fmt.aprintf(format, ..args)
 	app.toast_until = ticks_ms() + 3500
+	app.toast_t0 = now_s()
+}
+
+now_s :: proc() -> f32 {return f32(ticks_ms()) / 1000}
+
+ease_out :: proc(x: f32) -> f32 {
+	x := clamp(x, 0, 1)
+	return 1 - (1 - x) * (1 - x) * (1 - x)
+}
+
+// Eased 0..1 progress of an animation that started at t0; keeps frames coming until done.
+progress :: proc(t0, dur: f32) -> f32 {
+	p := (app.now - t0) / dur
+	if p < 1 do app.animating = true
+	return ease_out(p)
 }
 
 status_text :: proc(st: gf.OperationStatus) -> string {
@@ -184,6 +206,7 @@ status_text :: proc(st: gf.OperationStatus) -> string {
 // Directory model
 
 kind_of :: proc(name: string, mode: os.Permissions) -> Kind {
+	if _, _, ok := archive_kind(name); ok do return .Archive
 	ext := strings.to_lower(filepath.ext(name), context.temp_allocator)
 	switch ext {
 	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif", ".heic", ".tiff", ".ico", ".xcf", ".kra":
@@ -302,7 +325,9 @@ go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 	}
 	app.cwd = new_cwd
 	if mode != .Replace {
-		app.scroll = 0
+		app.scroll, app.scroll_to = 0, 0
+		app.nav_t0 = now_s()
+		app.nav_dir = -1 if mode == .Back else 1
 		app.focus, app.anchor = -1, -1
 		app.searching = false
 		if app.edit_focus == .Search || app.edit_focus == .Path do app.edit_focus = .None
@@ -491,14 +516,14 @@ open_entry :: proc(vi: int) {
 		go_to(p)
 		return
 	}
-	if _, err := os.process_start({command = {"xdg-open", p}}); err != nil do toastf("「%s」を開けません", e.name)
+	if spawn({"xdg-open", p}) == 0 do toastf("「%s」を開けません", e.name)
 }
 
 open_terminal :: proc() {
 	terms := [?]string{os.get_env("TERMINAL", context.temp_allocator), "ame-terminal", "ghostty", "foot", "kgx", "gnome-terminal", "xterm"}
 	for t in terms {
 		if t == "" do continue
-		if _, err := os.process_start({working_dir = app.cwd, command = {t}}); err == nil do return
+		if spawn({t}, app.cwd) != 0 do return
 	}
 	toastf("端末が見つかりません")
 }
@@ -552,6 +577,11 @@ dialog_ok :: proc() {
 			app.focus, app.anchor = k, k
 			ensure_visible(k)
 		}
+	case .Compress:
+		name := strings.trim_space(edit_str(&app.dlg_edit))
+		if name_problem(name) != "" do return
+		app.dialog = .None
+		compress(name)
 	case .Confirm_Delete:
 		app.dialog = .None
 		do_delete()
@@ -659,6 +689,18 @@ run_pending :: proc() {
 			app.dialog = .None
 			if app.edit_focus == .Dialog do app.edit_focus = .None
 		case .Close:     app.running = false
+		case .Extract:   for vi in selection() do extract(vi)
+		case .Compress:
+			sel := selection()
+			if len(sel) == 0 || in_trash() do break
+			name := "アーカイブ"
+			if len(sel) == 1 do name, _, _ = archive_kind(app.entries[sel[0]].name)
+			if len(sel) == 1 && name == "" do name = app.entries[sel[0]].name
+			app.dialog = .Compress
+			edit_set(&app.dlg_edit, fmt.tprintf("%s.zip", name))
+			app.dlg_edit.anchor, app.dlg_edit.cur = 0, len(app.dlg_edit.buf) - 4
+			app.edit_focus = .Dialog
+
 		}
 	}
 }
@@ -686,6 +728,10 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("完全に削除…", .Delete, "Delete")
 	} else if vi >= 0 {
 		add("開く", .Open, "Enter")
+		if n == 1 {
+			if _, _, ok := archive_kind(app.entries[vi].name); ok do add("ここに展開", .Extract)
+		}
+		add("圧縮…", .Compress)
 		sep()
 		add("切り取り", .Cut, "Ctrl+X")
 		add("コピー", .Copy, "Ctrl+C")
@@ -797,7 +843,7 @@ active_edit :: proc() -> ^Edit {
 	switch app.edit_focus {
 	case .Path:   return &app.path_edit
 	case .Search: return &app.search
-	case .Dialog: return &app.dlg_edit if app.dialog == .Rename || app.dialog == .Mkdir else nil
+	case .Dialog: return &app.dlg_edit if app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress else nil
 	case .None:
 	}
 	return nil
@@ -956,12 +1002,24 @@ ensure_visible :: proc(k: int) {
 	if k < 0 || app.body.h <= 0 do return
 	r := item_rect(k)
 	top := px(LIST_HEAD_H) if !app.grid else 0
-	if r.y - top < app.scroll do app.scroll = r.y - top
-	if r.y + r.h > app.scroll + app.body.h do app.scroll = r.y + r.h - app.body.h
+	if r.y - top < app.scroll_to do app.scroll_to = r.y - top
+	if r.y + r.h > app.scroll_to + app.body.h do app.scroll_to = r.y + r.h - app.body.h
 }
 
 frame :: proc() {
 	W, H := f32(cv.w), f32(cv.h)
+	t := now_s()
+	app.dt = clamp(t - app.last_t, 0, 1.0 / 30)
+	app.last_t, app.now = t, t
+	app.animating = false
+	if app.dialog != app.prev_dialog {
+		if app.dialog != .None do app.dlg_t0 = t
+		app.prev_dialog = app.dialog
+	}
+	if app.menu_open && !app.prev_menu do app.menu_t0 = t
+	app.prev_menu = app.menu_open
+	draw_alpha = 255
+
 	reset_clip()
 	clear_canvas(BG)
 	clear(&app.hdr_hot)
@@ -1036,6 +1094,17 @@ draw_header :: proc(r: Rect) {
 	if icon_button({right, y, bs, bs}, I_LIST if app.grid else I_GRID) do push(.View_List if app.grid else .View_Grid)
 	right -= bs + px(2)
 	if icon_button({right, y, bs, bs}, I_SEARCH, app.searching) do push(.Search)
+	if len(jobs) > 0 {
+		right -= bs + px(2)
+		cx, cy := right + bs / 2, y + bs / 2
+		head := int(app.now * 12) % 8
+		for i in 0 ..< 8 {
+			a := f32(i) / 8 * 2 * math.PI
+			fade := u8(60 + 195 * ((8 + i - head) % 8) / 7)
+			d := px(3)
+			rrect({cx + math.cos(a) * px(9) - d / 2, cy + math.sin(a) * px(9) - d / 2, d, d}, d / 2, with_alpha(ACCENT, fade))
+		}
+	}
 	right -= px(8)
 
 	bar := Rect{x, y, max(right - x, px(60)), bs}
@@ -1127,7 +1196,14 @@ draw_body :: proc() {
 	n := len(app.view)
 	app.cols = max(1, int((b.w - px(24)) / px(GRID_CELL_W)))
 	max_scroll := max(0, content_height() - b.h)
-	if app.wheel != 0 && hovering(b) do app.scroll -= app.wheel * px(56)
+	if app.wheel != 0 && hovering(b) do app.scroll_to -= app.wheel * px(72)
+	app.scroll_to = clamp(app.scroll_to, 0, max_scroll)
+	if d := app.scroll_to - app.scroll; abs(d) < 0.5 {
+		app.scroll = app.scroll_to
+	} else {
+		app.scroll += d * (1 - math.exp(-app.dt * 16)) // frame-rate independent easing
+		app.animating = true
+	}
 	app.scroll = clamp(app.scroll, 0, max_scroll)
 
 	if n == 0 {
@@ -1180,6 +1256,13 @@ draw_body :: proc() {
 		e := &app.entries[vi]
 		ir := item_rect(k)
 		r := Rect{bx + ir.x, by + ir.y, ir.w, ir.h}
+		ip := progress(app.nav_t0 + f32(min(k - first, 30)) * 0.016, 0.3)
+		if ip < 1 {
+			draw_alpha = u32(ip * 255)
+			r.x += (1 - ip) * px(22) * app.nav_dir
+			r.y += (1 - ip) * px(10)
+		}
+		defer draw_alpha = 255
 		hit := shrink(r, px(3)) if app.grid else Rect{r.x + px(6), r.y + px(1), r.w - px(12), r.h - px(2)}
 		hov := hovering(hit) && !app.band_on
 		if e.sel do rrect(hit, px(10 if app.grid else 8), SEL)
@@ -1329,8 +1412,11 @@ draw_menu :: proc() {
 		w = max(w, f32(text_width(it.label, size) + text_width(it.key, fs(13))) + px(56))
 		h += item_h
 	}
+	p := progress(app.menu_t0, 0.16)
+	draw_alpha = u32(p * 255)
+	defer draw_alpha = 255
 	x := min(app.menu_pos.x, f32(cv.w) - w - px(4))
-	y := app.menu_pos.y
+	y := app.menu_pos.y - (1 - p) * px(8)
 	if y + h > f32(cv.h) - px(4) do y = max(px(4), y - h)
 	r := Rect{x, y, w, h}
 	rrect({r.x, r.y + px(2), r.w, r.h}, px(12), hex(0x000000, 70))
@@ -1361,11 +1447,14 @@ draw_menu :: proc() {
 }
 
 draw_dialog :: proc(W, H: f32) {
-	fill({0, 0, W, H}, hex(0x000000, 90))
+	p := progress(app.dlg_t0, 0.22)
+	fill({0, 0, W, H}, hex(0x000000, u8(90 * p)))
+	draw_alpha = u32(p * 255)
+	defer draw_alpha = 255
 	w := min(px(400), W - px(32))
-	is_input := app.dialog == .Rename || app.dialog == .Mkdir
+	is_input := app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress
 	h := px(196) if is_input else px(170)
-	r := Rect{(W - w) / 2, (H - h) / 2, w, h}
+	r := Rect{(W - w) / 2, (H - h) / 2 + (1 - p) * px(24), w, h}
 	rrect(r, px(14), POP_BG)
 	rrect(r, px(14), LINE, px(1))
 
@@ -1379,6 +1468,9 @@ draw_dialog :: proc(W, H: f32) {
 		title = "フォルダー名の変更" if e.is_dir else "ファイル名の変更"
 		ok = "名前を変更"
 		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)), e.name)
+	case .Compress:
+		title, ok = "圧縮（.zip / .tar.gz / .tar.xz / .7z）", "作成"
+		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)))
 	case .Mkdir:
 		title, ok = "新しいフォルダー", "作成"
 		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)))
@@ -1414,7 +1506,12 @@ draw_toast :: proc(W, H: f32) {
 	size := fs(14)
 	msg := ellipsize(app.toast, size, W - px(80))
 	w := f32(text_width(msg, size)) + px(36)
-	r := Rect{(W - w) / 2, H - px(96), w, px(40)}
+	p := progress(app.toast_t0, 0.3)
+	left := f32(app.toast_until - ticks_ms()) / 300 // fade out over the last 300 ms
+	if left < 1 do app.animating = true
+	draw_alpha = u32(p * clamp(left, 0, 1) * 255)
+	defer draw_alpha = 255
+	r := Rect{(W - w) / 2, H - px(96) + (1 - p) * px(48), w, px(40)}
 	rrect(r, px(20), hex(0x1e2230, 245))
 	text(r.x + px(18), baseline(r, size), msg, size, FG)
 }
@@ -1667,9 +1764,6 @@ dump_frame :: proc(path: string) {
 }
 
 main :: proc() {
-	when ODIN_OS == .Linux {
-		libc.signal(17, auto_cast libc.SIG_IGN) // SIGCHLD: let spawned apps/terminals reap themselves
-	}
 	opacity := 0.7
 	if s := os.get_env("GF_OPACITY", context.temp_allocator); s != "" {
 		if v, ok := strconv.parse_f64(s); ok do opacity = clamp(v, 0, 1)
@@ -1720,7 +1814,8 @@ main :: proc() {
 				}
 				plat_present(buf)
 				dirty, urgent = false, false
-				if dump_path != "" {
+				if app.animating do dirty = true // next frame comes with the frame callback
+				if dump_path != "" && !app.animating { // dump the settled frame
 					dump_frame(dump_path)
 					break
 				}
@@ -1733,8 +1828,10 @@ main :: proc() {
 		timeout := -1
 		if app.toast != "" && app.toast_until > ticks_ms() do timeout = int(app.toast_until - ticks_ms()) + 10
 		if dirty do timeout = 16 // waiting for the compositor to release a buffer
+		if len(jobs) > 0 && (timeout < 0 || timeout > 100) do timeout = 100 // poll children + spinner
 		alive, redraw, timed_out := plat_wait(timeout)
 		if !alive do break
+		if reap_jobs() && app.dialog == .None do reload()
 		// timeout = toast expired or retrying a busy buffer
 		if redraw || timed_out do dirty = true
 		if len(events) == 0 do continue

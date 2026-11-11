@@ -18,6 +18,7 @@ Canvas :: struct {
 }
 
 cv: Canvas
+draw_alpha: u32 = 255 // global opacity for fade animations
 
 hex :: proc(v: u32, a: u8 = 255) -> Color {
 	return {u8(v >> 16), u8(v >> 8), u8(v), a}
@@ -59,7 +60,7 @@ clear_canvas :: proc(c: Color) {
 
 @(private = "file")
 blend :: #force_inline proc(p: ^u32, c: Color, cov: u32) {
-	a := (u32(c.a) * cov + 127) / 255
+	a := (u32(c.a) * cov * draw_alpha + 32512) / 65025
 	if a == 0 do return
 	inv := 255 - a
 	d := p^
