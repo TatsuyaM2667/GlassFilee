@@ -4,7 +4,7 @@ pkgver=r0
 pkgrel=1
 pkgdesc="Translucent GNOME Files-style file manager in pure Odin (Wayland), with Filee-style conversion"
 arch=(x86_64 aarch64)
-url="https://github.com/TatsuyaM2667/GlassFilee"
+url="https://github.com/TatsuyaM2667/ame-Filemanager"
 license=(MIT)
 depends=(wayland libxkbcommon freetype2 libarchive xdg-utils ttf-nerd-fonts-symbols noto-fonts-cjk)
 optdepends=('ffmpeg: image/video/audio conversion and previews'
@@ -18,17 +18,17 @@ source=("git+$url.git")
 sha256sums=(SKIP)
 
 pkgver() {
-    cd GlassFilee
+    cd ame-Filemanager
     printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {
-    cd GlassFilee
+    cd ame-Filemanager
     odin build src/gui -out:gf-gui -o:speed
 }
 
 package() {
-    cd GlassFilee
+    cd ame-Filemanager
     install -Dm755 gf-gui "$pkgdir/usr/bin/gf-gui"
     install -Dm644 glassfilee.desktop "$pkgdir/usr/share/applications/glassfilee.desktop"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

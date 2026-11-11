@@ -1,367 +1,80 @@
-# 🌟 GlassFilee
+# GlassFilee
 
-<div align="center">
+**English** | [日本語](README.ja.md)
 
-**A lightweight, modern file manager with integrated file conversion**
+A translucent, GNOME Files–style file manager written in pure **Odin**, with Filee-style
+drag-to-convert built in. It talks to Wayland directly — no GTK, no SDL, no GPU context —
+so it idles at **0% CPU and ~19 MB of RAM**.
 
-[![Status](https://img.shields.io/badge/status-v0.1-brightgreen)](STATUS.md)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20FreeBSD-lightgrey)](INSTALL.md)
+## Features
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Install](#-installation) • [Docs](#-documentation) • [Roadmap](#-roadmap)
+- **GNOME Files look**: sidebar (Home, Documents, Downloads, Pictures, Videos, Trash, Computer),
+  back/forward, breadcrumb path bar, icon and list views, sorting, rubber-band selection,
+  right-click menus, rename / new-folder dialogs. Translucent background like the ame-shell terminal.
+- **Tabs, always on** like a browser: `+` button, Ctrl+T / Ctrl+W / Ctrl+Tab, middle-click a folder.
+- **Convert like Filee**: Ctrl+drag files (or right-click → 変換…, Ctrl+E) and a donut of formats
+  swirls open at the cursor; drop on a slice. The result is written next to the original while a
+  progress ring spins on its icon. Uses whatever is installed: ffmpeg (images / video / audio),
+  pandoc (documents), LibreOffice (office → PDF), ImageMagick (image → PDF), bsdtar (archives).
+- **Archives**: right-click → ここに展開 for zip, tar.gz/xz/zst/bz2/lz4, 7z, rar, iso, deb, rpm…
+  (via bsdtar) and single .gz/.xz/.zst/.bz2/.lz4 files; 圧縮… creates .zip / .tar.gz / .tar.xz / .7z.
+  Runs in the background.
+- **Quick preview** (Space): images, video frames and text zoom out of the icon; ←/→ to browse.
+- **Search** filters the folder instantly and walks subfolders in the background.
+- **Trash** (freedesktop spec, shared with GNOME): move, restore, empty.
+- **Clipboard shared with other apps** (GNOME / KDE / browsers).
+- **Smooth animations** (scrolling, folder-entry cascade, menus, dialogs, toasts) that only draw
+  while something moves.
 
-</div>
-
----
-
-## 🎯 Project Goals
-
-- **Seamless Integration**: File management + conversion in one tool
-- **Modern UI**: Glass morphism with transparent, blurred interfaces _(v0.4+)_
-- **Low-Level Performance**: Built with Zig (UI) + Odin (Core)
-- **Cross-Platform**: Chimera Linux, Arch Linux, FreeBSD, and Web _(v1.0)_
-
----
-
-## ✨ Features
-
-### v0.1 (Current - **FULLY WORKING** ✅)
-
-- ✅ **File Operations**: List, copy, move, delete, rename
-- ✅ **Directory Management**: Create directories, navigate filesystem
-- ✅ **File Information**: Get detailed file metadata
-- ✅ **CLI Interface**: Fast, keyboard-driven workflow
-- ✅ **Cross-Platform**: Linux (glibc/musl), FreeBSD
-
-### Future Versions
-
-- **v0.2**: GUI with DVUI + SDL3
-- **v0.3**: Drag & drop, multi-select, icons
-- **v0.4**: Glass morphism UI with blur effects
-- **v0.5**: Filee conversion integration (images, PDF, video)
-- **v0.6**: Thumbnails, search, tabs, dual-pane
-- **v0.7**: Window transparency (compositor detection)
-- **v1.0**: WebAssembly, packages for all platforms
-
-See [docs/ROADMAP.md](docs/ROADMAP.md) for details.
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Zig** 0.13.x
-- Wayland, FreeType, xkbcommon (for `gf-gui`) ([Download](https://ziglang.org/download/))
-- **Odin** latest ([Install](https://odin-lang.org/))
-
-### Build & Run (3 commands)
+## Install
 
 ```bash
-git clone <repository-url>
-cd AmeFileManger
-./build.sh
-```
-
-### Install (Chimera Linux / Arch Linux / FreeBSD)
-
-```bash
-./install.sh            # → ~/.local/bin/gf-gui, launcher entry, and default file manager
+git clone https://github.com/TatsuyaM2667/ame-Filemanager.git
+cd ame-Filemanager
+./install.sh                # → ~/.local/bin/gf-gui, launcher entry, default file manager
 NO_DEFAULT=1 ./install.sh   # keep your current default file manager
 ```
 
-- **Arch Linux**: `cd packaging/arch && makepkg -si` (needs `odin` from the extra repo)
-- **FreeBSD**: `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils` then `./install.sh`
-- Requires a recent Odin (dev-2026-08 or newer: the new `core:os` API).
+| System | Steps |
+| --- | --- |
+| Chimera Linux | install Odin from odin-lang.org, then `apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs ffmpeg` → `./install.sh` |
+| Arch Linux | `cd packaging/arch && makepkg -si` |
+| FreeBSD | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg` → `./install.sh` |
 
-### GUI
+Requirements: a Wayland compositor with xdg-shell, a recent Odin (dev-2026-08 or newer),
+libwayland, libxkbcommon, FreeType, bsdtar. Fonts: Adwaita Sans, Noto Sans CJK, Symbols Nerd Font
+(other fonts are found through `fc-match`).
 
-A GNOME Files–style file manager written entirely in **Odin**: it talks to Wayland directly
-(wl_shm software rendering, xkbcommon, text-input-v3 for IME, FreeType for text).
-No GTK, no SDL, no GPU context — about **14 MB** RSS plus the window buffer.
+Background opacity: `GF_OPACITY=0.85 gf-gui` (default 0.7).
 
-```bash
-gf-gui [path]
-GF_OPACITY=0.85 gf-gui   # background opacity, default 0.7 (same as the ame-shell terminal)
-```
-
-Sidebar places, back/forward, breadcrumb path bar (click it or Ctrl+L to type a path),
-icon/list views, sorting by name/size/date, rubber-band selection, right-click menus,
-trash with restore (freedesktop spec, shared with GNOME), rename/new-folder dialogs,
-type-ahead search, open in terminal.
-Right-click an archive → **ここに展開** (zip, tar.gz/xz/zst/bz2/lz4, 7z, rar, iso, deb, rpm, …
-via bsdtar; single .gz/.xz/.zst/.bz2/.lz4 files via their tools), or select items → **圧縮…**
-(.zip / .tar.gz / .tar.xz / .7z by extension). Both run in the background.
-**Convert like Filee**: Ctrl+drag selected files (or right-click → 変換…, Ctrl+E) and a donut of
-formats swirls open at the cursor; drop on a slice. Output lands next to the original, with a
-progress ring on the icon. Engines are whatever is installed — ffmpeg (images/video/audio),
-pandoc (documents), LibreOffice (office → PDF), ImageMagick (image → PDF), bsdtar (archives).
-
-**Quick preview** (Space): images, video frames and text zoom out of the icon; ←/→ to browse.
-**Tabs** (Ctrl+T / Ctrl+W / Ctrl+Tab, middle-click a folder). **Search** also walks subfolders
-in the background. **Clipboard** is shared with other apps (GNOME/KDE/browser file copy & paste).
-
-Smooth scrolling and eased transitions (folder entry cascade, menus, dialogs, toasts) —
-frames are only drawn while something moves, so idle CPU stays at 0.
+## Keys
 
 | Key | Action |
 | --- | --- |
-| Enter / double-click | Open (folders in place, files with the default app) |
+| Enter / double-click | Open |
+| Space | Quick preview |
+| Ctrl+drag / Ctrl+E | Convert (donut menu) |
 | Alt+← / Alt+→ / Alt+↑ | Back / Forward / Parent |
 | Ctrl+L / Ctrl+F | Type a path / Search (or just start typing) |
 | Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste |
 | F2 | Rename |
 | Delete / Shift+Delete | Move to trash / Delete permanently |
 | Ctrl+Shift+N | New folder |
+| Ctrl+T / Ctrl+W / Ctrl+Tab | New / close / next tab |
 | Ctrl+1 / Ctrl+2 | List / Icon view |
 | Ctrl+H | Show hidden files |
-| Space | Quick preview |
-| Ctrl+drag / Ctrl+E | Convert (donut menu) |
-| Ctrl+T / Ctrl+W / Ctrl+Tab | New / close / next tab |
 | Ctrl+A, F5, Ctrl+Q | Select all, Reload, Quit |
 
-Needs `bsdtar` (libarchive) for archives.
-
-Requires a Wayland compositor with xdg-shell, plus libwayland, libxkbcommon, FreeType,
-and the Adwaita Sans / Noto Sans CJK / Symbols Nerd Font fonts.
-
-### Try It
-
-```bash
-# Show help
-./zig-out/bin/gf-cli help
-
-# List files
-./zig-out/bin/gf-cli ls .
-
-# Get file info
-./zig-out/bin/gf-cli stat README.md
-
-# Create directory
-./zig-out/bin/gf-cli mkdir test_folder
-
-# Copy file
-./zig-out/bin/gf-cli cp README.md README_backup.md
-```
-
-See [QUICKSTART.md](QUICKSTART.md) for more examples.
-
----
-
-## 📦 Installation
-
-### Quick Install
-
-```bash
-./build.sh
-sudo cp zig-out/bin/gf-cli /usr/local/bin/
-gf-cli help
-```
-
-### Package Managers (Coming Soon)
-
-```bash
-# Arch Linux (AUR)
-yay -S glassfilee
-
-# FreeBSD
-pkg install glassfilee
-
-# Chimera Linux
-apk add glassfilee
-```
-
-See [INSTALL.md](INSTALL.md) for detailed instructions.
-
----
-
-## 🏗️ Architecture
+## Layout
 
 ```
-┌─────────────────────────────────────┐
-│ UI Layer: Zig + DVUI + SDL3         │  ← Future (v0.2+)
-│  - File browser, icons, breadcrumbs │
-│  - Context menus, DnD, multi-select │
-│  - Glass morphism effects           │
-└──────────────┬──────────────────────┘
-               │ C ABI (static link)
-┌──────────────▼──────────────────────┐
-│ Core Layer: Odin (UI-independent)   │  ← Current (v0.1) ✅
-│  - Directory traversal, File I/O    │
-│  - Copy/Move/Delete/Rename/Mkdir    │
-│  - Search & filtering               │
-└─────────────────────────────────────┘
+src/core/    Odin core: file operations, trash (also built as a C-ABI library for the CLI)
+src/gui/     Odin GUI: Wayland client (wl.odin), renderer (draw.odin), fonts (font.odin),
+             app (app.odin), conversion (convert.odin), preview, archives
+src/cli/     gf-cli, a small Zig 0.13 command-line tool on top of the core (optional)
+tests/       Odin trash tests; ./test.sh runs everything
 ```
 
-### Why This Stack?
+## License
 
-- **Odin**: Powerful `core:os` library, excellent C interop
-- **Zig**: Safe, fast, great for UI and build system
-- **C ABI**: Clean boundary, no runtime dependency hell
-- **DVUI**: Immediate-mode GUI, perfect for dynamic UIs
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
-
----
-
-## 📚 Documentation
-
-| Document                                     | Description                 |
-| -------------------------------------------- | --------------------------- |
-| [QUICKSTART.md](QUICKSTART.md)               | Get started in 5 minutes    |
-| [INSTALL.md](INSTALL.md)                     | Installation guide          |
-| [STATUS.md](STATUS.md)                       | Project status & completion |
-| [docs/API.md](docs/API.md)                   | API reference (Odin + Zig)  |
-| [docs/BUILDING.md](docs/BUILDING.md)         | Build instructions          |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design               |
-| [docs/ROADMAP.md](docs/ROADMAP.md)           | Development roadmap         |
-| [CONTRIBUTING.md](CONTRIBUTING.md)           | How to contribute           |
-| [TODO.md](TODO.md)                           | Task list                   |
-
----
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-./test.sh
-
-# Run unit tests only
-zig build test
-
-# Manual testing
-./zig-out/bin/gf-cli ls /tmp
-```
-
-All tests passing ✅
-
----
-
-## 🛠️ Development
-
-### Project Structure
-
-```
-AmeFileManger/
-├── src/
-│   ├── core/          # Odin core (file operations)
-│   ├── bindings/      # Zig FFI bindings
-│   ├── cli/           # CLI application
-│   └── gui/           # GUI (v0.2+)
-├── docs/              # Documentation
-├── tests/             # Tests
-├── build.sh           # Build script
-├── test.sh            # Test script
-└── build.zig          # Zig build config
-```
-
-### Building
-
-```bash
-# Quick build
-./build.sh
-
-# Clean build
-./clean.sh && ./build.sh
-
-# Build with Zig directly
-zig build
-
-# Run tests
-zig build test
-```
-
-### Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-Priority areas for v0.1:
-
-- ✅ Core functionality (COMPLETE)
-- ✅ CLI application (COMPLETE)
-- ✅ Tests (COMPLETE)
-- ⏳ Platform testing (FreeBSD, Chimera)
-
----
-
-## 🗺️ Roadmap
-
-| Version  | Features            | Status                |
-| -------- | ------------------- | --------------------- |
-| **v0.1** | CLI + Odin/Zig core | ✅ **COMPLETE**       |
-| v0.2     | GUI with DVUI       | 📝 Planned (Dec 2026) |
-| v0.3     | Essential features  | 📝 Planned (Dec 2026) |
-| v0.4     | Glass morphism UI   | 📝 Planned (Jan 2027) |
-| v0.5     | Filee integration   | 📝 Planned (Feb 2027) |
-| v0.6     | Advanced features   | 📝 Planned (Feb 2027) |
-| v0.7     | Window transparency | 📝 Planned (Mar 2027) |
-| v1.0     | Release + packages  | 📝 Planned (Apr 2027) |
-
-See [docs/ROADMAP.md](docs/ROADMAP.md) for full details.
-
----
-
-## 🌐 Platform Support
-
-| Platform                 | Build | Run | Status            |
-| ------------------------ | ----- | --- | ----------------- |
-| **Arch Linux (glibc)**   | ✅    | ✅  | Fully working     |
-| **Chimera Linux (musl)** | ✅    | ✅  | Ready for testing |
-| **FreeBSD (x86_64)**     | ✅    | ✅  | Ready for testing |
-| **WebAssembly**          | ⏸️    | ⏸️  | v1.0              |
-
----
-
-## 🎨 Screenshots
-
-_(Coming in v0.2 with GUI)_
-
-For now, here's the CLI:
-
-```
-$ gf-cli ls /home/user/documents
-Listing: /home/user/documents
-================================================================================
-Name                                          Size        Type  Flags
---------------------------------------------------------------------------------
-report.pdf                                    2.5 MB      File
-meeting_notes.txt                            14.2 KB      File
-project/                                      4.0 KB  Directory
-.hidden_config                               512 B       File  [HIDDEN]
-================================================================================
-Total: 4 items
-```
-
----
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-## 🙏 Acknowledgments
-
-- **Odin Language** - Powerful, simple systems language
-- **Zig Language** - Safe, fast, fun
-- **DVUI** - Excellent immediate-mode GUI for Zig
-- **SDL3** - Cross-platform multimedia
-- **Filee** - Inspiration for conversion features
-
----
-
-## 📞 Contact
-
-- **Issues**: [GitHub Issues](https://github.com/your-username/AmeFileManger/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-username/AmeFileManger/discussions)
-- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
-
----
-
-<div align="center">
-
-**Made with ❤️ using Odin and Zig**
-
-⭐ Star us on GitHub! ⭐
-
-</div>
+MIT

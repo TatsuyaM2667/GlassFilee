@@ -50,6 +50,7 @@ I_FOLDER_OPEN :: 0xf07c
 I_LINK :: 0xf0c1
 I_SORT_UP :: 0xf0de
 I_SORT_DOWN :: 0xf0dd
+I_PLUS :: 0xf067
 
 // ---------------------------------------------------------------------------
 // State
@@ -1107,10 +1108,8 @@ frame :: proc() {
 	fill({cx, app.header_h - 1, W - cx, 1}, LINE)
 
 	top := app.header_h
-	if len(app.tabs) > 1 {
-		draw_tabbar({cx, top, W - cx, px(38)})
-		top += px(38)
-	}
+	draw_tabbar({cx, top, W - cx, px(38)}) // always shown, like a browser
+	top += px(38)
 	app.body = {cx, top, W - cx, H - top}
 	draw_body()
 
@@ -1857,6 +1856,7 @@ build_places :: proc() {
 	for d in dirs {
 		p, ok := user_dirs[d.key]
 		if !ok do p, _ = filepath.join({app.home, d.fallback}, context.temp_allocator)
+		if d.key == "XDG_DOCUMENTS_DIR" && !os.is_dir(p) do _ = os.make_directory_all(p) // always offer Documents (standard XDG folder)
 		add(d.label, d.icon, p)
 	}
 	os.make_directory_all(app.trash_files)
@@ -2031,7 +2031,7 @@ tab_title :: proc(i: int) -> string {
 draw_tabbar :: proc(r: Rect) {
 	fill({r.x, r.y + r.h - 1, r.w, 1}, LINE)
 	n := len(app.tabs)
-	tw := min(px(240), (r.w - px(12)) / f32(n))
+	tw := min(px(240), (r.w - px(12) - px(40)) / f32(n)) // room for the + button
 	x0 := r.x + px(6)
 	target := x0 + f32(app.cur_tab) * tw
 	if app.tab_x == 0 do app.tab_x = target
@@ -2059,6 +2059,8 @@ draw_tabbar :: proc(r: Rect) {
 		case hov && app.pressed && app.button == 2:    push(.Close_Tab, i)
 		}
 	}
+	plus := Rect{x0 + f32(n) * tw + px(4), r.y + px(5), px(30), r.h - px(11)}
+	if icon_button(plus, I_PLUS) do push(.New_Tab)
 }
 
 // ---------------------------------------------------------------------------
