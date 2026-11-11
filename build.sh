@@ -1,11 +1,11 @@
 #!/bin/bash
-# GlassFilee Build Script
+# Ame-FileManager Build Script
 # Builds both Odin core and Zig CLI
 
 set -e
 
 echo "================================"
-echo "GlassFilee Build Script"
+echo "Ame-FileManager Build Script"
 echo "================================"
 echo ""
 
@@ -59,7 +59,7 @@ echo "[4/4] Building Zig CLI + Odin GUI..."
 "$ZIG" build
 
 # GUI (pure Odin: Wayland + FreeType + xkbcommon)
-odin build src/gui -out:zig-out/bin/gf-gui -o:speed
+odin build src/gui -out:zig-out/bin/ame-filemanager -o:speed
 
 if [ ! -f "zig-out/bin/gf-cli" ]; then
     echo "❌ Error: Failed to build Zig CLI"
@@ -81,7 +81,7 @@ echo "  ./zig-out/bin/gf-cli help"
 echo "  ./zig-out/bin/gf-cli ls ."
 echo ""
 echo "Run the GUI:"
-echo "  ./zig-out/bin/gf-gui [path]"
+echo "  ./zig-out/bin/ame-filemanager [path]"
 echo ""
 echo "Run tests:"
 echo "  zig build test"

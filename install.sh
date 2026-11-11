@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build and install GlassFilee (Chimera Linux, Arch Linux, FreeBSD, other Wayland systems).
+# Build and install Ame-FileManager (Chimera Linux, Arch Linux, FreeBSD, other Wayland systems).
 #   ./install.sh                 → ~/.local, and make it the default file manager
 #   PREFIX=/usr/local sudo -E ./install.sh   → system-wide
 #   NO_DEFAULT=1 ./install.sh    → don't change the default file manager
@@ -15,7 +15,7 @@ esac
 
 mkdir -p zig-out/bin
 # GUI: pure Odin (Wayland + FreeType + xkbcommon)
-odin build src/gui -out:zig-out/bin/gf-gui -o:speed $LINK
+odin build src/gui -out:zig-out/bin/ame-filemanager -o:speed $LINK
 
 # CLI (optional): written for Zig 0.13 exactly
 ZIG="${ZIG:-zig}"
@@ -30,24 +30,28 @@ else
 fi
 
 # BSD install(1) has no -D, so create directories first
-mkdir -p "$PREFIX/bin" "$PREFIX/share/applications"
-install -m 755 zig-out/bin/gf-gui "$PREFIX/bin/gf-gui"
+mkdir -p "$PREFIX/bin" "$PREFIX/share/applications" "$PREFIX/share/icons/hicolor/scalable/apps"
+# earlier versions were installed as gf-gui / glassfilee.desktop
+rm -f "$PREFIX/bin/gf-gui" "$PREFIX/share/applications/glassfilee.desktop"
+install -m 644 assets/ame-filemanager.svg "$PREFIX/share/icons/hicolor/scalable/apps/ame-filemanager.svg"
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" 2>/dev/null || true
+install -m 755 zig-out/bin/ame-filemanager "$PREFIX/bin/ame-filemanager"
 [ -f zig-out/bin/gf-cli ] && install -m 755 zig-out/bin/gf-cli "$PREFIX/bin/gf-cli"
-install -m 644 glassfilee.desktop "$PREFIX/share/applications/glassfilee.desktop"
+install -m 644 ame-filemanager.desktop "$PREFIX/share/applications/ame-filemanager.desktop"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PREFIX/share/applications" || true
 
 if [ -z "$NO_DEFAULT" ]; then
     # default for folders (also used by browsers' "show in folder" fallbacks and xdg-open)
     if command -v xdg-mime >/dev/null 2>&1; then
-        xdg-mime default glassfilee.desktop inode/directory
+        xdg-mime default ame-filemanager.desktop inode/directory
     else
         cfg="${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"
         mkdir -p "$(dirname "$cfg")"
         touch "$cfg"
         grep -q '^\[Default Applications\]' "$cfg" || printf '[Default Applications]\n' >> "$cfg"
-        awk '!/^inode\/directory=/ {print} /^\[Default Applications\]$/ {print "inode/directory=glassfilee.desktop"}' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+        awk '!/^inode\/directory=/ {print} /^\[Default Applications\]$/ {print "inode/directory=ame-filemanager.desktop"}' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
     fi
-    echo "GlassFilee is now the default file manager (undo: NO_DEFAULT=1 and set another app with xdg-mime)"
+    echo "Ame-FileManager is now the default file manager (undo: NO_DEFAULT=1 and set another app with xdg-mime)"
 fi
 
-echo "Installed: $PREFIX/bin/gf-gui"
+echo "Installed: $PREFIX/bin/ame-filemanager"

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Ame-FileManager
+GenericName=File Manager
+GenericName[ja]=ファイルマネージャー
+Comment=Translucent file manager with drag-to-convert
+Comment[ja]=ドラッグで変換できる半透明のファイルマネージャー
+Exec=ame-filemanager %U
+Icon=ame-filemanager
+Terminal=false
+Categories=System;FileTools;FileManager;
+MimeType=inode/directory;
+StartupNotify=true
+Keywords=files;folder;explorer;

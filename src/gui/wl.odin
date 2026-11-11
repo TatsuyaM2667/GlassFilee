@@ -867,7 +867,7 @@ make_pool :: proc(bw, bh: i32) -> bool {
 	one := int(stride * bh)
 	w.pool_size = one * 2
 	// POSIX shm (Linux + FreeBSD): create, unlink right away, keep only the fd
-	name := strings.clone_to_cstring(fmt.tprintf("/glassfilee-%d-%d", posix.getpid(), ticks_ms()), context.temp_allocator)
+	name := strings.clone_to_cstring(fmt.tprintf("/ame-filemanager-%d-%d", posix.getpid(), ticks_ms()), context.temp_allocator)
 	fd := posix.shm_open(name, {.RDWR, .CREAT, .EXCL, .CLOEXEC}, {.IRUSR, .IWUSR})
 	if fd < 0 do return false
 	posix.shm_unlink(name)

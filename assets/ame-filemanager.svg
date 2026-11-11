@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Ame-FileManager: a faceted crystal folder holding a gem-cut raindrop (ame = rain) -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#232a52"/>
+      <stop offset="1" stop-color="#0a0e1f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.62" r="0.5">
+      <stop offset="0" stop-color="#89b4fa" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#89b4fa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tab" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4c4fb8"/>
+      <stop offset="1" stop-color="#3a3a96"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#glow)"/>
+
+  <!-- rain -->
+  <g stroke="#89b4fa" stroke-linecap="round" stroke-opacity="0.45" stroke-width="4">
+    <line x1="186" y1="34" x2="178" y2="52"/>
+    <line x1="210" y1="44" x2="202" y2="62"/>
+    <line x1="62" y1="36" x2="56" y2="50"/>
+  </g>
+
+  <!-- folder back + tab -->
+  <polygon points="40,74 100,74 118,92 216,92 216,118 40,118" fill="url(#tab)"/>
+  <polygon points="52,100 204,100 204,118 52,118" fill="#e6e9ff" opacity="0.92"/>
+
+  <!-- faceted front panel (four facets meeting off-center, like a cut crystal) -->
+  <polygon points="34,114 222,114 140,152" fill="#b4befe"/>
+  <polygon points="222,114 210,212 140,152" fill="#7f6df2"/>
+  <polygon points="210,212 46,212 140,152" fill="#5b4fd0"/>
+  <polygon points="46,212 34,114 140,152" fill="#8fa6f8"/>
+  <polygon points="34,114 222,114 140,152" fill="url(#sheen)"/>
+  <polyline points="34,114 140,152 222,114" fill="none" stroke="#ffffff" stroke-opacity="0.25" stroke-width="1.5"/>
+  <polyline points="46,212 140,152 210,212" fill="none" stroke="#1e1b4b" stroke-opacity="0.25" stroke-width="1.5"/>
+
+  <!-- gem-cut raindrop: pointed top, rounded faceted bottom -->
+  <g transform="translate(128 124)">
+    <polygon points="0,0 -13,24 -22,44 -20,58 -11,68 0,72 0,40" fill="#eef5ff"/>
+    <polygon points="0,0 13,24 22,44 20,58 11,68 0,72 0,40" fill="#8cb2fb"/>
+    <polygon points="-22,44 -20,58 -11,68 0,72 0,52" fill="#c3d6ff"/>
+    <polygon points="22,44 20,58 11,68 0,72 0,52" fill="#5d7ee6"/>
+    <polygon points="0,0 -13,24 0,40" fill="#ffffff" opacity="0.75"/>
+    <polygon points="-22,44 0,40 0,52" fill="#dbe7ff"/>
+    <polygon points="22,44 0,40 0,52" fill="#7396f2"/>
+    <polygon points="0,0 -13,24 -22,44 -20,58 -11,68 0,72 11,68 20,58 22,44 13,24" fill="none" stroke="#ffffff" stroke-opacity="0.65" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="-9" cy="50" r="2.6" fill="#ffffff" opacity="0.9"/>
+  </g>
+</svg>

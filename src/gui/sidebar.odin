@@ -169,17 +169,25 @@ eject_device :: proc(d: Device) {
 }
 
 // ---------------------------------------------------------------------------
-// Color tags (~/.config/glassfilee/tags: "<color>\t<absolute path>")
+// Color tags (~/.config/ame-filemanager/tags: "<color>\t<absolute path>")
 
 TAG_COLORS := [8]u32{0, 0xf38ba8, 0xfab387, 0xf9e2af, 0xa6e3a1, 0x89b4fa, 0xcba6f7, 0x9399b2}
 TAG_NAMES := [8]string{"", "赤", "オレンジ", "黄", "緑", "青", "紫", "グレー"}
 tags: map[string]u8
 tag_filter: u8
 
+// ~/.config/ame-filemanager (moved over from the old "glassfilee" name once).
+app_config_dir :: proc() -> string {
+	base, _ := os.user_config_dir(context.temp_allocator)
+	dir, _ := filepath.join({base, "ame-filemanager"}, context.temp_allocator)
+	old, _ := filepath.join({base, "glassfilee"}, context.temp_allocator)
+	if !os.exists(dir) && os.is_dir(old) do _ = os.rename(old, dir)
+	return dir
+}
+
 @(private = "file")
 tags_file :: proc() -> string {
-	dir, _ := os.user_config_dir(context.temp_allocator)
-	p, _ := filepath.join({dir, "glassfilee", "tags"}, context.temp_allocator)
+	p, _ := filepath.join({app_config_dir(), "tags"}, context.temp_allocator)
 	return p
 }
 
@@ -273,7 +281,7 @@ draw_sidebar :: proc(w, H: f32) {
 	fill({w, 0, 1, H}, LINE)
 	hh := app.header_h
 	size := fs(15)
-	title := "GlassFilee"
+	title := "Ame-FileManager"
 	tw := f32(text_width(title, size, true))
 	text((w - px(40) - tw) / 2 + px(4), baseline({0, 0, w, hh}, size), title, size, FG, true)
 	mb := Rect{w - px(40), px(6.5), px(34), px(34)}

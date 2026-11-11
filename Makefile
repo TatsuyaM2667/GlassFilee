@@ -1,4 +1,4 @@
-# GlassFilee Makefile
+# Ame-FileManager Makefile
 # Simple build helper (delegates to zig build)
 
 ZIG ?= $(shell ls $$HOME/.cache/ame-shell/toolchain/zig-linux-x86_64-0.13.0/zig 2>/dev/null || echo zig)
@@ -16,16 +16,16 @@ odin-core:
 
 # Build CLI tool
 build: odin-core
-	@echo "Building GlassFilee CLI..."
+	@echo "Building Ame-FileManager CLI..."
 	$(ZIG) build
-	odin build src/gui -out:zig-out/bin/gf-gui -o:speed
+	odin build src/gui -out:zig-out/bin/ame-filemanager -o:speed
 
 # Run CLI
 run: build
 	./zig-out/bin/gf-cli
 
 gui: build
-	./zig-out/bin/gf-gui
+	./zig-out/bin/ame-filemanager
 
 # Run tests
 test: odin-core
@@ -37,7 +37,7 @@ clean:
 
 # Help
 help:
-	@echo "GlassFilee Build Commands:"
+	@echo "Ame-FileManager Build Commands:"
 	@echo "  make build    - Build CLI tool"
 	@echo "  make run      - Build and run CLI"
 	@echo "  make test     - Run tests"

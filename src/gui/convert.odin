@@ -190,7 +190,7 @@ tmp_path :: proc(ext: string) -> string {
 	dir := os.get_env("XDG_RUNTIME_DIR", context.temp_allocator)
 	if dir == "" do dir = "/tmp"
 	tmp_seq += 1
-	p, _ := filepath.join({dir, strings.concatenate({"glassfilee-", itoa_tmp(int(posix.getpid())), "-", itoa_tmp(tmp_seq), ".", ext}, context.temp_allocator)}, context.temp_allocator)
+	p, _ := filepath.join({dir, strings.concatenate({"ame-filemanager-", itoa_tmp(int(posix.getpid())), "-", itoa_tmp(tmp_seq), ".", ext}, context.temp_allocator)}, context.temp_allocator)
 	return p
 }
 
@@ -459,8 +459,7 @@ rules: [dynamic]Rule
 
 @(private = "file")
 rules_file :: proc() -> string {
-	dir, _ := os.user_config_dir(context.temp_allocator)
-	p, _ := filepath.join({dir, "glassfilee", "watch.conf"}, context.temp_allocator)
+	p, _ := filepath.join({app_config_dir(), "watch.conf"}, context.temp_allocator)
 	return p
 }
 

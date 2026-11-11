@@ -1,11 +1,11 @@
 #!/bin/bash
-# GlassFilee Test Script
+# Ame-FileManager Test Script
 # Runs comprehensive tests
 
 set -e
 
 echo "================================"
-echo "GlassFilee Test Suite"
+echo "Ame-FileManager Test Suite"
 echo "================================"
 echo ""
 

@@ -1,6 +1,6 @@
 package main
 
-// GlassFilee GUI: a GNOME Files–style file manager drawn in software on a
+// Ame-FileManager GUI: a GNOME Files–style file manager drawn in software on a
 // translucent SDL3 window. Odin all the way down; no GTK, no GPU context.
 
 import "core:c/libc"
@@ -390,7 +390,7 @@ go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 			}
 		}
 	}
-	title := fmt.tprintf("%s — GlassFilee", location_name())
+	title := fmt.tprintf("%s — Ame-FileManager", location_name())
 	plat_set_title(string(title))
 	return true
 }
@@ -873,6 +873,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		for b in bookmarks do if b.path == side_menu_path do add("ブックマークを削除", .Remove_Bookmark)
 	}
 	app.menu_open, app.menu_main = true, main_menu
+	app.prev_menu = false // restart the opening animation even if a menu was still fading out
 	app.menu_pos = {app.mx, app.my}
 }
 
@@ -1573,65 +1574,6 @@ draw_floating_bar :: proc(b: Rect) {
 	text(r.x + px(12), baseline(r, size), msg, size, FG)
 }
 
-draw_menu :: proc() {
-	size := fs(14)
-	item_h, sep_h, pad := px(32), px(9), px(6)
-	w := px(200)
-	h := 2 * pad
-	for it in app.menu_items {
-		if it.label == "" {h += sep_h; continue}
-		w = max(w, f32(text_width(it.label, size) + text_width(it.key, fs(13))) + px(56))
-		h += item_h
-	}
-	p := progress(app.menu_t0, 0.16)
-	draw_alpha = u32(p * 255)
-	defer draw_alpha = 255
-	x := min(app.menu_pos.x, f32(cv.w) - w - px(4))
-	y := app.menu_pos.y - (1 - p) * px(8)
-	if y + h > f32(cv.h) - px(4) do y = max(px(4), y - h)
-	r := Rect{x, y, w, h}
-	rrect({r.x, r.y + px(2), r.w, r.h}, px(12), hex(0x000000, 70))
-	rrect(r, px(12), POP_BG)
-	rrect(r, px(12), LINE, px(1))
-	iy := y + pad
-	for it in app.menu_items {
-		if it.label == "" {
-			fill({x + px(12), iy + sep_h / 2, w - px(24), 1}, LINE)
-			iy += sep_h
-			continue
-		}
-		ir := Rect{x + pad, iy, w - 2 * pad, item_h}
-		if it.colors {
-			text(ir.x + px(10), baseline(ir, size), it.label, size, DIM)
-			for c in u8(0) ..= 7 {
-				dr := Rect{ir.x + px(56) + f32(c) * px(22), ir.y + px(5), px(22), px(22)}
-				if hovering(dr) do rrect(dr, px(11), HOVER)
-				if c == 0 do glyph_center(dr, I_CLOSE, fs(10), DIM)
-				else do tag_dot(dr.x + px(11), dr.y + px(11), px(7), c)
-				if clicked(dr) {
-					set_tag(c)
-					app.menu_open = false
-				}
-			}
-			iy += item_h
-			continue
-		}
-		col := FG if it.ok else with_alpha(FG, 80)
-		if it.ok && hovering(ir) do rrect(ir, px(6), HOVER)
-		text(ir.x + px(10), baseline(ir, size), it.label, size, col)
-		if it.key != "" {
-			kw := f32(text_width(it.key, fs(13)))
-			text(ir.x + ir.w - kw - px(10), baseline(ir, fs(13)), it.key, fs(13), with_alpha(col, 120))
-		}
-		if it.ok && clicked(ir) {
-			push(it.act, -1)
-			app.menu_open = false
-		}
-		iy += item_h
-	}
-	if app.pressed && !contains(r, app.mx, app.my) do app.menu_open = false
-}
-
 draw_dialog :: proc(W, H: f32) {
 	p := progress(app.dlg_t0, 0.22)
 	fill({0, 0, W, H}, hex(0x000000, u8(90 * p)))
@@ -1781,7 +1723,7 @@ on_key :: proc(ev: Ev) {
 		return
 	}
 	if app.menu_open {
-		if key == K_ESCAPE do app.menu_open = false
+		menu_key(key)
 		return
 	}
 	if app.dialog != .None {
@@ -2010,11 +1952,11 @@ main :: proc() {
 	BG = hex(0x060913, u8(opacity * 255))
 
 	if !font_init() {
-		fmt.eprintln("GlassFilee: no usable font found")
+		fmt.eprintln("Ame-FileManager: no usable font found")
 		os.exit(1)
 	}
-	if !plat_init("GlassFilee", "glassfilee", 1000, 640) {
-		fmt.eprintln("GlassFilee: cannot open a Wayland window (WAYLAND_DISPLAY not set or compositor lacks xdg-shell)")
+	if !plat_init("Ame-FileManager", "ame-filemanager", 1000, 640) {
+		fmt.eprintln("Ame-FileManager: cannot open a Wayland window (WAYLAND_DISPLAY not set or compositor lacks xdg-shell)")
 		os.exit(1)
 	}
 
@@ -2042,6 +1984,7 @@ main :: proc() {
 	watch_init()
 	load_rules()
 	refresh_devices()
+
 
 
 	dirty, urgent := true, false

@@ -1,4 +1,4 @@
-# GlassFilee
+# Ame-FileManager
 
 **English** | [日本語](README.ja.md)
 
@@ -37,6 +37,8 @@ so it idles at **0% CPU and ~19 MB of RAM**.
 - **Bookmarks** (shared with GNOME), **USB drives** (mount via udisks2 / eject), **color tags**
   with a sidebar filter, **Git status** dots, **properties** (Ctrl+I), **batch rename** (F2 on
   several items: `*` = old name, `##` = number).
+- **Radial right-click menus** with the same swirl-in animation as the convert donut; tag colors
+  sit on an arc under the ring.
 - **Smooth animations** (scrolling, folder-entry cascade, menus, dialogs, toasts) that only draw
   while something moves.
 
@@ -45,7 +47,7 @@ so it idles at **0% CPU and ~19 MB of RAM**.
 ```bash
 git clone https://github.com/TatsuyaM2667/ame-Filemanager.git
 cd ame-Filemanager
-./install.sh                # → ~/.local/bin/gf-gui, launcher entry, default file manager
+./install.sh                # → ~/.local/bin/ame-filemanager, launcher entry, default file manager
 NO_DEFAULT=1 ./install.sh   # keep your current default file manager
 ```
 
@@ -59,7 +61,7 @@ Requirements: a Wayland compositor with xdg-shell, a recent Odin (dev-2026-08 or
 libwayland, libxkbcommon, FreeType, bsdtar. Fonts: Adwaita Sans, Noto Sans CJK, Symbols Nerd Font
 (other fonts are found through `fc-match`).
 
-Background opacity: `GF_OPACITY=0.85 gf-gui` (default 0.7).
+Background opacity: `GF_OPACITY=0.85 ame-filemanager` (default 0.7).
 
 ## Keys
 

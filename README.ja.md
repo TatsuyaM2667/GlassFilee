@@ -1,4 +1,4 @@
-# GlassFilee
+# Ame-FileManager
 
 [English](README.md) | **日本語**
 
@@ -35,6 +35,7 @@
 - **ブックマーク**（GNOME と共通）、**USB ドライブ**（udisks2 でマウント／取り出し）、**色ラベル**
   （サイドバーで絞り込み）、**Git の状態**表示、**プロパティ**（Ctrl+I）、**まとめて名前変更**
   （複数選択して F2。`*` = 元の名前、`##` = 番号）。
+- **ドーナツ型の右クリックメニュー**: 変換ドーナツと同じく渦を巻いて開きます。色ラベルはリングの下の弧に並びます。
 - **なめらかなアニメーション**（スクロール、フォルダーを開いた時の連続表示、メニュー、ダイアログ、通知）。
   動いている間だけ描画するので軽いままです。
 
@@ -43,7 +44,7 @@
 ```bash
 git clone https://github.com/TatsuyaM2667/ame-Filemanager.git
 cd ame-Filemanager
-./install.sh                # → ~/.local/bin/gf-gui、ランチャー登録、既定のファイルマネージャーに設定
+./install.sh                # → ~/.local/bin/ame-filemanager、ランチャー登録、既定のファイルマネージャーに設定
 NO_DEFAULT=1 ./install.sh   # 既定のファイルマネージャーは変えない
 ```
 
@@ -57,7 +58,7 @@ NO_DEFAULT=1 ./install.sh   # 既定のファイルマネージャーは変え�
 libwayland、libxkbcommon、FreeType、bsdtar。フォントは Adwaita Sans・Noto Sans CJK・Symbols Nerd Font
 （無い場合は `fc-match` で探します）。
 
-背景の不透明度: `GF_OPACITY=0.85 gf-gui`（既定 0.7）。
+背景の不透明度: `GF_OPACITY=0.85 ame-filemanager`（既定 0.7）。
 
 ## キー操作
 
