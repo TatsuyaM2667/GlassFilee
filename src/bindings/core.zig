@@ -37,6 +37,7 @@ pub const OperationStatus = enum(i32) {
     error_exists = -3,
     error_io = -4,
     error_invalid_path = -5,
+    cancelled = -6,
     error_unknown = -100,
 
     pub fn toError(self: OperationStatus) !void {
@@ -47,6 +48,7 @@ pub const OperationStatus = enum(i32) {
             .error_exists => error.AlreadyExists,
             .error_io => error.IoError,
             .error_invalid_path => error.InvalidPath,
+            .cancelled => error.Cancelled,
             .error_unknown => error.Unknown,
         };
     }

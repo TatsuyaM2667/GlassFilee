@@ -23,6 +23,20 @@ so it idles at **0% CPU and ~19 MB of RAM**.
 - **Search** filters the folder instantly and walks subfolders in the background.
 - **Trash** (freedesktop spec, shared with GNOME): move, restore, empty.
 - **Clipboard shared with other apps** (GNOME / KDE / browsers).
+- **Thumbnails** for photos and videos (ffmpeg, shared GNOME cache, only what is on screen).
+- **Split view** (F3, Tab switches panes) and **drag & drop** — between panes, onto folders,
+  to and from other apps.
+- **Background copy/move** with a progress panel and cancel; **undo** (Ctrl+Z, or the toast's
+  元に戻す button) for trash, rename, move, copy and new folder.
+- **Auto-refresh**: changes made by other programs appear immediately (inotify / kqueue).
+- **Auto-convert folders** (Filee's watch): right-click a folder's background → 自動変換を設定…
+  and every file that arrives is converted.
+- **Donut back face**: press Tab (or scroll) on the convert donut for rotate, mirror, grayscale,
+  shrink, square crop, remove audio, normalize volume, zip… The ring shows real ffmpeg progress.
+- **Music player**: a folder of songs gets a player bar with cover art, seek bar and equalizer.
+- **Bookmarks** (shared with GNOME), **USB drives** (mount via udisks2 / eject), **color tags**
+  with a sidebar filter, **Git status** dots, **properties** (Ctrl+I), **batch rename** (F2 on
+  several items: `*` = old name, `##` = number).
 - **Smooth animations** (scrolling, folder-entry cascade, menus, dialogs, toasts) that only draw
   while something moves.
 
@@ -61,6 +75,9 @@ Background opacity: `GF_OPACITY=0.85 gf-gui` (default 0.7).
 | Delete / Shift+Delete | Move to trash / Delete permanently |
 | Ctrl+Shift+N | New folder |
 | Ctrl+T / Ctrl+W / Ctrl+Tab | New / close / next tab |
+| F3 / Tab | Split view / switch pane |
+| Ctrl+Z | Undo |
+| Ctrl+D / Ctrl+I | Bookmark / Properties |
 | Ctrl+1 / Ctrl+2 | List / Icon view |
 | Ctrl+H | Show hidden files |
 | Ctrl+A, F5, Ctrl+Q | Select all, Reload, Quit |

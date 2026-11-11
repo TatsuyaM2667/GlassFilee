@@ -6,6 +6,7 @@ import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:sync"
 
 // ============================================================================
 // Core Types
@@ -36,6 +37,7 @@ OperationStatus :: enum i32 {
 	ErrorExists      = -3,
 	ErrorIO          = -4,
 	ErrorInvalidPath = -5,
+	Cancelled        = -6,
 	ErrorUnknown     = -100,
 }
 
@@ -244,10 +246,16 @@ url_unescape :: proc(s: string) -> string {
 
 // Moves path into the trash, writing the matching .trashinfo.
 trash_path :: proc(path: string) -> OperationStatus {
+	st, _ := trash_path_named(path)
+	return st
+}
+
+// Like trash_path, also returning the name inside Trash/files (temp-allocated) for undo.
+trash_path_named :: proc(path: string) -> (OperationStatus, string) {
 	context.allocator = context.temp_allocator
 	td := trash_dir()
 	if td == "" {
-		return .ErrorIO
+		return .ErrorIO, ""
 	}
 	files, _ := filepath.join({td, "files"})
 	info, _ := filepath.join({td, "info"})
@@ -256,7 +264,7 @@ trash_path :: proc(path: string) -> OperationStatus {
 
 	abs, abs_err := os.get_absolute_path(path, context.allocator)
 	if abs_err != nil || !path_exists(abs) {
-		return .ErrorNotFound
+		return .ErrorNotFound, ""
 	}
 	base := filepath.base(abs)
 	name := base
@@ -277,15 +285,15 @@ trash_path :: proc(path: string) -> OperationStatus {
 	)
 	info_path, _ := filepath.join({info, strings.concatenate({name, ".trashinfo"})})
 	if os.write_entire_file_from_string(info_path, content) != nil {
-		return .ErrorPermission
+		return .ErrorPermission, ""
 	}
 	dst, _ := filepath.join({files, name})
 	if os.rename(abs, dst) != nil {
 		// shortcut: no per-volume trash; files on other filesystems can't be trashed (delete instead)
 		os.remove(info_path)
-		return .ErrorIO
+		return .ErrorIO, ""
 	}
-	return .Success
+	return .Success, name
 }
 
 // Puts a trashed item (name inside Trash/files) back where it came from.
@@ -345,4 +353,80 @@ empty_trash :: proc() -> OperationStatus {
 		}
 	}
 	return result
+}
+
+// ============================================================================
+// Copy with progress and cancellation (used by the GUI's background operations)
+// ============================================================================
+
+// Shared with a worker thread: read/write the fields with sync atomics.
+Progress :: struct {
+	total, done: i64,
+	cancel:      bool,
+}
+
+// Total bytes under path (symlinks are not followed).
+tree_size :: proc(path: string, p: ^Progress = nil) -> i64 {
+	context.allocator = context.temp_allocator
+	info, err := os.lstat(path, context.allocator)
+	if err != nil do return 0
+	if info.type != .Directory do return info.size
+	infos, rerr := os.read_all_directory_by_path(path, context.allocator)
+	if rerr != nil do return 0
+	n: i64
+	for fi in infos {
+		if p != nil && sync.atomic_load(&p.cancel) do return n
+		n += tree_size(fi.fullpath, p)
+	}
+	return n
+}
+
+// Recursively copies src to dst (dst must not exist), streaming file data so
+// progress can be reported and the copy cancelled between chunks.
+copy_tree :: proc(src, dst: string, p: ^Progress) -> OperationStatus {
+	if sync.atomic_load(&p.cancel) do return .Cancelled
+	info, err := os.lstat(src, context.temp_allocator)
+	if err != nil do return .ErrorNotFound
+	if path_exists(dst) do return .ErrorExists
+	#partial switch info.type {
+	case .Directory:
+		if os.make_directory(dst) != nil do return .ErrorPermission
+		os.change_mode(dst, info.mode)
+		infos, rerr := os.read_all_directory_by_path(src, context.temp_allocator)
+		if rerr != nil do return .ErrorPermission
+		for fi in infos {
+			d, _ := filepath.join({dst, fi.name}, context.temp_allocator)
+			if st := copy_tree(fi.fullpath, d, p); st != .Success do return st
+		}
+		return .Success
+	case .Symlink:
+		target, lerr := os.read_link(src, context.temp_allocator)
+		if lerr != nil || os.symlink(target, dst) != nil do return .ErrorIO
+		return .Success
+	}
+	in_f, oerr := os.open(src)
+	if oerr != nil do return .ErrorPermission
+	defer os.close(in_f)
+	out_f, cerr := os.open(dst, {.Write, .Create, .Excl, .Trunc}, info.mode)
+	if cerr != nil do return .ErrorPermission
+	buf := make([]byte, 1 << 20, context.temp_allocator)
+	for {
+		if sync.atomic_load(&p.cancel) {
+			os.close(out_f)
+			os.remove(dst) // drop the half-written file only
+			return .Cancelled
+		}
+		n, rerr := os.read(in_f, buf)
+		if n > 0 {
+			if w, werr := os.write(out_f, buf[:n]); werr != nil || w != n {
+				os.close(out_f)
+				os.remove(dst)
+				return .ErrorIO
+			}
+			sync.atomic_add(&p.done, i64(n))
+		}
+		if rerr != nil || n == 0 do break
+	}
+	os.close(out_f)
+	return .Success
 }

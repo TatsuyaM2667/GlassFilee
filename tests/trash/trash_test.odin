@@ -53,3 +53,33 @@ trash_restore_delete :: proc(t: ^testing.T) {
 	left, _ := os.read_all_directory_by_path(strings.concatenate({td, "/files"}, context.temp_allocator), context.temp_allocator)
 	testing.expect_value(t, len(left), 0)
 }
+
+@(test)
+copy_tree_progress_and_cancel :: proc(t: ^testing.T) {
+	base := os.get_env("GF_TEST_DIR", context.temp_allocator)
+	if base == "" do return
+	j :: proc(a: ..string) -> string {return strings.concatenate(a, context.temp_allocator)}
+	_ = os.make_directory_all(j(base, "/ct/src/sub"))
+	_ = os.write_entire_file_from_string(j(base, "/ct/src/a.txt"), "hello")
+	_ = os.write_entire_file_from_string(j(base, "/ct/src/sub/b.txt"), "world!")
+	_ = os.symlink("a.txt", j(base, "/ct/src/link"))
+
+	p: gf.Progress
+	testing.expect_value(t, gf.tree_size(j(base, "/ct/src")), i64(11 + len("a.txt"))) // file bytes + the link's own size (its target text)
+	testing.expect_value(t, gf.copy_tree(j(base, "/ct/src"), j(base, "/ct/dst"), &p), gf.OperationStatus.Success)
+	testing.expect_value(t, p.done, i64(11))
+	data, _ := os.read_entire_file_from_path(j(base, "/ct/dst/sub/b.txt"), context.temp_allocator)
+	testing.expect_value(t, string(data), "world!")
+	target, _ := os.read_link(j(base, "/ct/dst/link"), context.temp_allocator)
+	testing.expect_value(t, target, "a.txt") // symlinks are copied as links
+	testing.expect_value(t, gf.copy_tree(j(base, "/ct/src"), j(base, "/ct/dst"), &p), gf.OperationStatus.ErrorExists)
+
+	// a cancelled copy stops and leaves no half-written file behind
+	c := gf.Progress{cancel = true}
+	testing.expect_value(t, gf.copy_tree(j(base, "/ct/src/a.txt"), j(base, "/ct/c.txt"), &c), gf.OperationStatus.Cancelled)
+	testing.expect(t, !os.exists(j(base, "/ct/c.txt")))
+
+	st, name := gf.trash_path_named(j(base, "/ct/dst"))
+	testing.expect_value(t, st, gf.OperationStatus.Success)
+	testing.expect_value(t, name, "dst")
+}

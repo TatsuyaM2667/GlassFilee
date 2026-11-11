@@ -123,6 +123,7 @@ K_END :: 0xff57
 K_MENU :: 0xff67
 K_KP_ENTER :: 0xff8d
 K_F2 :: 0xffbf
+K_F3 :: 0xffc0
 K_F5 :: 0xffc2
 K_F10 :: 0xffc7
 K_A :: 'a'
@@ -136,6 +137,9 @@ K_R :: 'r'
 K_V :: 'v'
 K_W :: 'w'
 K_X :: 'x'
+K_Z :: 'z'
+K_D :: 'd'
+K_I :: 'i'
 K_1 :: '1'
 K_2 :: '2'
 
@@ -146,6 +150,7 @@ Mods :: bit_set[Mod]
 
 Ev_Kind :: enum {
 	None, Quit, Motion, Down, Up, Wheel, Key, Text, Preedit, Focus,
+	Dnd_Motion, Dnd_Leave, Dnd_Drop, Drag_End, // drag-and-drop (Dnd_Drop: text = paths, button = 1 copy / 2 move)
 }
 Ev :: struct {
 	kind:   Ev_Kind,
@@ -184,6 +189,7 @@ W :: struct {
 	configured, closed:                           bool,
 	redraw:                                       bool, // size/scale/configure changed
 	frame_cb:                                     Proxy, // pending wl_surface.frame callback
+	frame_cb_ms:                                  i64,
 	// buffers
 	pool:                                         Proxy,
 	pool_fd:                                      posix.FD,
@@ -193,6 +199,11 @@ W :: struct {
 	source_payload:                               [3]string, // gnome, uri-list, text
 	sel_offer:                                    Proxy,
 	offer_mimes:                                  map[Proxy]u8, // 1 gnome-copied-files, 2 text/uri-list
+	dnd_offer:                                    Proxy, // offer currently dragged over us
+	dnd_action:                                   u32,
+	drag_source:                                  Proxy, // our own drag in progress
+	drag_payload:                                 [3]string,
+	drag_paths:                                   string, // newline separated, for drops onto ourselves
 	pool_mem:                                     rawptr,
 	pool_size:                                    int,
 	buf_w, buf_h:                                 i32,
@@ -360,7 +371,9 @@ on_frame_done :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [
 }
 
 // True when the compositor is ready for a new frame (throttles redraws to the refresh rate).
-plat_can_draw :: proc() -> bool {return w.frame_cb == nil}
+// A callback older than 100 ms is treated as lost: some compositors hold it back while
+// a resize (e.g. starting an interactive move) waits for our new-size buffer.
+plat_can_draw :: proc() -> bool {return w.frame_cb == nil || ticks_ms() - w.frame_cb_ms > 100}
 
 @(private = "file")
 on_seat :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
@@ -594,8 +607,44 @@ on_data_device :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: 
 			w.offer_mimes[a[0].o] = 0
 			listen(a[0].o, on_offer)
 		}
-	case 1: // enter (drag-and-drop): not supported, drop the offer
-		if a[4].o != nil do drop_offer(a[4].o) // enter(serial, surface, x, y, offer)
+	case 1: // enter(serial, surface, x, y, offer): a drag reached our window
+		o := a[4].o
+		if o == nil do return 0
+		if w.offer_mimes[o] & 3 == 0 {
+			drop_offer(o) // not files
+			return 0
+		}
+		w.dnd_offer, w.dnd_action = o, 0
+		mime: cstring = "text/uri-list" if w.offer_mimes[o] & 2 != 0 else "x-special/gnome-copied-files"
+		wl_proxy_marshal_flags(o, 0, nil, ver(o), 0, a[0].u, mime) // accept
+		if ver(o) >= 3 {
+			// copy | move; moving is the natural default for drags between our own panes
+			wl_proxy_marshal_flags(o, 4, nil, ver(o), 0, u32(3), u32(2) if w.drag_source != nil else u32(1))
+		}
+		append(&events, Ev{kind = .Dnd_Motion, x = f32(a[2].i) / 256, y = f32(a[3].i) / 256, mods = w.mods})
+	case 2: // leave
+		if w.dnd_offer != nil {
+			drop_offer(w.dnd_offer)
+			w.dnd_offer = nil
+		}
+		append(&events, Ev{kind = .Dnd_Leave})
+	case 3: // motion(time, x, y)
+		append(&events, Ev{kind = .Dnd_Motion, x = f32(a[1].i) / 256, y = f32(a[2].i) / 256, mods = w.mods})
+	case 4: // drop
+		o := w.dnd_offer
+		if o == nil do return 0
+		paths: string
+		if w.drag_source != nil {
+			paths = strings.clone(w.drag_paths) // our own drag: no need to go through a pipe
+		} else {
+			list, _, _ := receive_paths(o, context.temp_allocator)
+			paths = strings.join(list[:], "\n")
+		}
+		action := w.dnd_action if w.dnd_action != 0 else 1
+		if ver(o) >= 3 do wl_proxy_marshal_flags(o, 3, nil, ver(o), 0) // finish
+		drop_offer(o)
+		w.dnd_offer = nil
+		append(&events, Ev{kind = .Dnd_Drop, text = paths, button = u8(action)})
 	case 5: // selection
 		if w.sel_offer != nil && w.sel_offer != a[0].o do drop_offer(w.sel_offer)
 		w.sel_offer = a[0].o
@@ -618,6 +667,7 @@ on_offer :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_
 		case "text/uri-list":                w.offer_mimes[target] |= 2
 		}
 	}
+	if op == 2 && target == w.dnd_offer do w.dnd_action = a[0].u // action chosen by the compositor (modifiers)
 	return 0
 }
 
@@ -627,10 +677,11 @@ on_source :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl
 	switch op {
 	case 1: // send(mime, fd)
 		fd := posix.FD(a[1].i)
-		data := w.source_payload[2]
+		pl := &w.drag_payload if target == w.drag_source else &w.source_payload
+		data := pl[2]
 		switch string(a[0].s) {
-		case "x-special/gnome-copied-files": data = w.source_payload[0]
-		case "text/uri-list":                data = w.source_payload[1]
+		case "x-special/gnome-copied-files": data = pl[0]
+		case "text/uri-list":                data = pl[1]
 		}
 		for len(data) > 0 {
 			n := posix.write(fd, raw_data(data), len(data))
@@ -638,8 +689,12 @@ on_source :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl
 			data = data[n:]
 		}
 		posix.close(fd)
-	case 2: // cancelled: someone else owns the clipboard now
+	case 2, 4: // cancelled (clipboard taken / drag aborted), dnd_finished
 		if target == w.source do w.source = nil
+		if target == w.drag_source {
+			w.drag_source = nil
+			append(&events, Ev{kind = .Drag_End})
+		}
 		wl_proxy_marshal_flags(target, 1, nil, ver(target), 1)
 	}
 	return 0
@@ -660,10 +715,8 @@ file_uri :: proc(path: string, allocator := context.temp_allocator) -> string {
 	return strings.to_string(b)
 }
 
-// Publishes files to the system clipboard (copy or cut).
-plat_set_clipboard_files :: proc(paths: []string, cut: bool) {
-	if w.ddm == nil || w.ddev == nil do return
-	for s in w.source_payload do delete(s)
+@(private = "file")
+make_payload :: proc(paths: []string, cut: bool) -> [3]string {
 	gnome := strings.builder_make()
 	uris := strings.builder_make()
 	text := strings.builder_make()
@@ -676,7 +729,37 @@ plat_set_clipboard_files :: proc(paths: []string, cut: bool) {
 		if i > 0 do strings.write_byte(&text, '\n')
 		strings.write_string(&text, p)
 	}
-	w.source_payload = {strings.to_string(gnome), strings.to_string(uris), strings.to_string(text)}
+	return {strings.to_string(gnome), strings.to_string(uris), strings.to_string(text)}
+}
+
+@(private = "file")
+new_source :: proc() -> Proxy {
+	src := wl_proxy_marshal_flags(w.ddm, 0, &wl_data_source_interface, ver(w.ddm), 0, rawptr(nil))
+	listen(src, on_source)
+	for m in ([]cstring{"x-special/gnome-copied-files", "text/uri-list", "text/plain;charset=utf-8", "UTF8_STRING"}) {
+		wl_proxy_marshal_flags(src, 0, nil, ver(src), 0, m)
+	}
+	return src
+}
+
+// Starts dragging files out of the window (other apps, our folders, the other pane).
+plat_start_drag :: proc(paths: []string) {
+	if w.ddm == nil || w.ddev == nil || w.drag_source != nil || len(paths) == 0 do return
+	for s in w.drag_payload do delete(s)
+	delete(w.drag_paths)
+	w.drag_payload = make_payload(paths, false)
+	w.drag_paths = strings.join(paths, "\n")
+	src := new_source()
+	if ver(src) >= 3 do wl_proxy_marshal_flags(src, 2, nil, ver(src), 0, u32(3)) // copy | move
+	wl_proxy_marshal_flags(w.ddev, 0, nil, ver(w.ddev), 0, src, w.surface, rawptr(nil), w.serial)
+	w.drag_source = src
+}
+
+// Publishes files to the system clipboard (copy or cut).
+plat_set_clipboard_files :: proc(paths: []string, cut: bool) {
+	if w.ddm == nil || w.ddev == nil do return
+	for s in w.source_payload do delete(s)
+	w.source_payload = make_payload(paths, cut)
 	src := wl_proxy_marshal_flags(w.ddm, 0, &wl_data_source_interface, ver(w.ddm), 0, rawptr(nil))
 	listen(src, on_source)
 	for m in ([]cstring{"x-special/gnome-copied-files", "text/uri-list", "text/plain;charset=utf-8", "UTF8_STRING"}) {
@@ -695,6 +778,13 @@ plat_get_clipboard_files :: proc(allocator := context.temp_allocator) -> (paths:
 	if o == nil || w.source != nil do return
 	m := w.offer_mimes[o]
 	if m == 0 do return
+	return receive_paths(o, allocator)
+}
+
+// Reads file paths offered by another app (gnome-copied-files or uri-list).
+@(private = "file")
+receive_paths :: proc(o: Proxy, allocator: runtime.Allocator) -> (paths: [dynamic]string, cut, ok: bool) {
+	m := w.offer_mimes[o]
 	mime: cstring = "x-special/gnome-copied-files" if m & 1 != 0 else "text/uri-list"
 	fds: [2]posix.FD
 	if posix.pipe(&fds) != .OK do return
@@ -819,6 +909,7 @@ plat_present :: proc(b: ^Shm_Buf) {
 	if ver(s) >= 4 do wl_proxy_marshal_flags(s, 9, nil, ver(s), 0, i32(0), i32(0), w.buf_w, w.buf_h)
 	else do wl_proxy_marshal_flags(s, 2, nil, ver(s), 0, i32(0), i32(0), w.width, w.height)
 	w.frame_cb = wl_proxy_marshal_flags(s, 3, &wl_callback_interface, ver(s), 0, rawptr(nil))
+	w.frame_cb_ms = ticks_ms()
 	listen(w.frame_cb, on_frame_done)
 	wl_proxy_marshal_flags(s, 6, nil, ver(s), 0)
 	b.busy = true
@@ -843,7 +934,7 @@ plat_text_input :: proc(on: bool, rect: [4]i32) {
 // Waits up to timeout_ms (-1 = forever) for input and fills `events`.
 // redraw: the window was configured/rescaled; timed_out: nothing arrived in time.
 // Protocol traffic like buffer releases wakes us but sets neither.
-plat_wait :: proc(timeout_ms: int) -> (alive, redraw, timed_out: bool) {
+plat_wait :: proc(timeout_ms: int, extra: []posix.FD = nil) -> (alive, redraw, timed_out: bool) {
 	d := w.display
 	for wl_display_prepare_read(d) != 0 do wl_display_dispatch_pending(d)
 	wl_display_flush(d)
@@ -857,12 +948,21 @@ plat_wait :: proc(timeout_ms: int) -> (alive, redraw, timed_out: bool) {
 		dt := int(max(w.repeat_next - ticks_ms(), 0))
 		t = dt if t < 0 else min(t, dt)
 	}
-	pfd := posix.pollfd{fd = posix.FD(wl_display_get_fd(d)), events = {.IN}}
-	if posix.poll(&pfd, 1, c.int(t)) > 0 {
+	// display fd + extra fds (directory watcher, worker wake-up pipe)
+	pfds: [8]posix.pollfd
+	pfds[0] = {fd = posix.FD(wl_display_get_fd(d)), events = {.IN}}
+	n := 1
+	for fd in extra {
+		if n == len(pfds) do break
+		pfds[n] = {fd = fd, events = {.IN}}
+		n += 1
+	}
+	r := posix.poll(&pfds[0], posix.nfds_t(n), c.int(t))
+	if r > 0 && .IN in pfds[0].revents {
 		if wl_display_read_events(d) < 0 do return false, false, false
 	} else {
 		wl_display_cancel_read(d)
-		timed_out = true
+		timed_out = r <= 0
 	}
 	if wl_display_dispatch_pending(d) < 0 do return false, false, false
 	if w.repeat_key != 0 && ticks_ms() >= w.repeat_next {

@@ -19,7 +19,7 @@ ARCHIVE_EXTS :: []string {
 SINGLE_EXTS :: [][2]string{{".gz", "gzip"}, {".z", "gzip"}, {".xz", "xz"}, {".lzma", "xz"}, {".zst", "zstd"}, {".bz2", "bzip2"}, {".lz4", "lz4"}}
 
 Job_Kind :: enum {
-	Extract, Decompress, Compress, Convert,
+	Extract, Decompress, Compress, Convert, Mount, Thumb,
 }
 
 Job :: struct {
@@ -28,6 +28,19 @@ Job :: struct {
 	label: string, // archive / output name for messages
 	dest:  string, // Extract: folder we created; Convert: output file
 	src:   string, // Convert: source name (for the progress ring)
+	prog_path, log_path: string, // ffmpeg -progress output and log (real progress)
+	duration_us:         i64, // 0 = not known yet, -1 = none (e.g. images)
+	frac:                f32,
+}
+
+free_job :: proc(j: Job) {
+	if j.prog_path != "" do os.remove(j.prog_path)
+	if j.log_path != "" do os.remove(j.log_path)
+	delete(j.label)
+	delete(j.dest)
+	delete(j.src)
+	delete(j.prog_path)
+	delete(j.log_path)
 }
 
 jobs: [dynamic]Job
@@ -45,8 +58,15 @@ archive_kind :: proc(name: string) -> (stem: string, tool: string, ok: bool) {
 }
 
 // Starts a process; returns its pid (0 on failure). The pidfd is closed: we reap with waitpid.
-spawn :: proc(cmd: []string, dir := "") -> posix.pid_t {
-	p, err := os.process_start({command = cmd, working_dir = dir})
+spawn :: proc(cmd: []string, dir := "", stderr_path := "") -> posix.pid_t {
+	desc := os.Process_Desc{command = cmd, working_dir = dir}
+	if stderr_path != "" {
+		if f, ferr := os.create(stderr_path); ferr == nil {
+			desc.stderr = f
+			defer os.close(f)
+		}
+	}
+	p, err := os.process_start(desc)
 	if err != nil do return 0
 	when ODIN_OS == .Linux { // os.process_start opened a pidfd
 		if p.handle != 0 && p.handle != ~uintptr(0) do posix.close(posix.FD(p.handle))
@@ -128,6 +148,7 @@ reap_jobs :: proc() -> bool {
 		status: c.int
 		pid := posix.waitpid(-1, &status, {.NOHANG})
 		if pid <= 0 do break
+		if music_child_exited(pid) do continue
 		for j, i in jobs {
 			if j.pid != pid do continue
 			ok := posix.WIFEXITED(status) && posix.WEXITSTATUS(status) == 0
@@ -140,20 +161,29 @@ reap_jobs :: proc() -> bool {
 			case .Decompress:
 				if ok do toastf("「%s」を展開しました", j.label)
 				else do toastf("「%s」を展開できませんでした", j.label)
+			case .Mount:
+				if !ok do toastf("「%s」を%sできませんでした", j.label, "取り出し" if j.dest == "eject" else "マウント")
+				else if j.dest == "eject" do toastf("「%s」を取り外せます", j.label)
+				refresh_devices()
+			case .Thumb:
+				thumb_done(j, ok)
 			case .Compress, .Convert:
 				// the output name was new (unique_dest), so a failed run's leftover is ours to remove
 				if !ok && j.kind == .Convert do os.remove(j.dest)
 				if ok do toastf("「%s」を作成しました", j.label)
 				else do toastf("「%s」を作成できませんでした", j.label)
 			}
-			delete(j.label)
-			delete(j.dest)
-			delete(j.src)
+			if j.kind != .Thumb && j.kind != .Mount do done = true // these don't change the listing
+			free_job(j)
 			ordered_remove(&jobs, i)
-			done = true
 			break
 		}
 	}
 	return done
 }
 
+
+visible_jobs :: proc() -> bool {
+	for j in jobs do if j.kind != .Thumb do return true
+	return false
+}
