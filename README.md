@@ -52,7 +52,7 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for details.
 ### Prerequisites
 
 - **Zig** 0.13.x
-- **GTK** 4.12+ (for `gf-gui`) ([Download](https://ziglang.org/download/))
+- Wayland, FreeType, xkbcommon (for `gf-gui`) ([Download](https://ziglang.org/download/))
 - **Odin** latest ([Install](https://odin-lang.org/))
 
 ### Build & Run (3 commands)
@@ -69,26 +69,37 @@ cd AmeFileManger
 ./install.sh   # → ~/.local/bin/gf-gui + app launcher entry (glassfilee.desktop)
 ```
 
-### GUI (transparent glass window)
+### GUI
+
+A GNOME Files–style file manager written entirely in **Odin**: it talks to Wayland directly
+(wl_shm software rendering, xkbcommon, text-input-v3 for IME, FreeType for text).
+No GTK, no SDL, no GPU context — about **14 MB** RSS plus the window buffer.
 
 ```bash
-./zig-out/bin/gf-gui [path]          # GTK4, translucent background
-GF_OPACITY=0.35 ./zig-out/bin/gf-gui # 0.0 = fully clear, 1.0 = opaque (default 0.45)
+gf-gui [path]
+GF_OPACITY=0.85 gf-gui   # background opacity, default 0.7 (same as the ame-shell terminal)
 ```
+
+Sidebar places, back/forward, breadcrumb path bar (click it or Ctrl+L to type a path),
+icon/list views, sorting by name/size/date, rubber-band selection, right-click menus,
+trash with restore (freedesktop spec, shared with GNOME), rename/new-folder dialogs,
+type-ahead search, open in terminal.
 
 | Key | Action |
 | --- | --- |
-| Enter / double-click | Open folder or file (default app) |
-| Backspace / Alt+↑ | Parent folder |
-| Alt+← | Back |
-| Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste (files and folders) |
+| Enter / double-click | Open (folders in place, files with the default app) |
+| Alt+← / Alt+→ / Alt+↑ | Back / Forward / Parent |
+| Ctrl+L / Ctrl+F | Type a path / Search (or just start typing) |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste |
 | F2 | Rename |
-| Delete | Delete (with confirmation, recursive for folders) |
+| Delete / Shift+Delete | Move to trash / Delete permanently |
 | Ctrl+Shift+N | New folder |
-| Ctrl+H | Toggle hidden files |
-| F5 | Refresh |
+| Ctrl+1 / Ctrl+2 | List / Icon view |
+| Ctrl+H | Show hidden files |
+| Ctrl+A, F5, Ctrl+Q | Select all, Reload, Quit |
 
-Requires GTK 4.12+ and **Zig 0.13** (build.sh picks `~/.cache/ame-shell/toolchain/zig-linux-x86_64-0.13.0/zig` if present, or set `ZIG=`).
+Requires a Wayland compositor with xdg-shell, plus libwayland, libxkbcommon, FreeType,
+and the Adwaita Sans / Noto Sans CJK / Symbols Nerd Font fonts.
 
 ### Try It
 

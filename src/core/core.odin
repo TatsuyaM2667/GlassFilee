@@ -1,5 +1,6 @@
 package gfcore
 
+import "core:c/libc"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -188,4 +189,160 @@ get_file_info :: proc(path: string) -> (FileInfo, OperationStatus) {
 
 	fi := file_info_from_os(path, info)
 	return fi, .Success
+}
+
+// ============================================================================
+// Trash (freedesktop.org Trash spec, same layout GNOME Files uses)
+// ============================================================================
+
+// Returns $XDG_DATA_HOME/Trash (usually ~/.local/share/Trash).
+trash_dir :: proc(allocator := context.allocator) -> string {
+	data, err := os.user_data_dir(context.temp_allocator)
+	if err != nil {
+		return ""
+	}
+	dir, _ := filepath.join({data, "Trash"}, allocator)
+	return dir
+}
+
+@(private)
+url_escape :: proc(s: string) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	for i in 0 ..< len(s) {
+		ch := s[i]
+		switch ch {
+		case 'A' ..= 'Z', 'a' ..= 'z', '0' ..= '9', '-', '.', '_', '~', '/':
+			strings.write_byte(&b, ch)
+		case:
+			fmt.sbprintf(&b, "%%%02X", ch)
+		}
+	}
+	return strings.to_string(b)
+}
+
+@(private)
+url_unescape :: proc(s: string) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	hex :: proc(c: u8) -> int {
+		switch c {
+		case '0' ..= '9': return int(c - '0')
+		case 'a' ..= 'f': return int(c - 'a' + 10)
+		case 'A' ..= 'F': return int(c - 'A' + 10)
+		}
+		return -1
+	}
+	for i := 0; i < len(s); i += 1 {
+		if s[i] == '%' && i + 2 < len(s) && hex(s[i + 1]) >= 0 && hex(s[i + 2]) >= 0 {
+			strings.write_byte(&b, u8(hex(s[i + 1]) * 16 + hex(s[i + 2])))
+			i += 2
+		} else {
+			strings.write_byte(&b, s[i])
+		}
+	}
+	return strings.to_string(b)
+}
+
+// Moves path into the trash, writing the matching .trashinfo.
+trash_path :: proc(path: string) -> OperationStatus {
+	context.allocator = context.temp_allocator
+	td := trash_dir()
+	if td == "" {
+		return .ErrorIO
+	}
+	files, _ := filepath.join({td, "files"})
+	info, _ := filepath.join({td, "info"})
+	os.make_directory_all(files)
+	os.make_directory_all(info)
+
+	abs, abs_err := os.get_absolute_path(path, context.allocator)
+	if abs_err != nil || !path_exists(abs) {
+		return .ErrorNotFound
+	}
+	base := filepath.base(abs)
+	name := base
+	for i := 2; ; i += 1 {
+		f, _ := filepath.join({files, name})
+		n, _ := filepath.join({info, strings.concatenate({name, ".trashinfo"})})
+		if !path_exists(f) && !path_exists(n) {
+			break
+		}
+		name = fmt.tprintf("%s.%d", base, i)
+	}
+
+	now := libc.time(nil)
+	t := libc.localtime(&now)
+	content := fmt.tprintf(
+		"[Trash Info]\nPath=%s\nDeletionDate=%04d-%02d-%02dT%02d:%02d:%02d\n",
+		url_escape(abs), t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec,
+	)
+	info_path, _ := filepath.join({info, strings.concatenate({name, ".trashinfo"})})
+	if os.write_entire_file_from_string(info_path, content) != nil {
+		return .ErrorPermission
+	}
+	dst, _ := filepath.join({files, name})
+	if os.rename(abs, dst) != nil {
+		// shortcut: no per-volume trash; files on other filesystems can't be trashed (delete instead)
+		os.remove(info_path)
+		return .ErrorIO
+	}
+	return .Success
+}
+
+// Puts a trashed item (name inside Trash/files) back where it came from.
+restore_from_trash :: proc(name: string) -> OperationStatus {
+	context.allocator = context.temp_allocator
+	td := trash_dir()
+	info_path, _ := filepath.join({td, "info", strings.concatenate({name, ".trashinfo"})})
+	data, err := os.read_entire_file_from_path(info_path, context.allocator)
+	if err != nil {
+		return .ErrorNotFound
+	}
+	orig := ""
+	text := string(data)
+	for line in strings.split_lines_iterator(&text) {
+		if strings.has_prefix(line, "Path=") {
+			orig = url_unescape(line[5:])
+		}
+	}
+	if orig == "" {
+		return .ErrorInvalidPath
+	}
+	if path_exists(orig) {
+		return .ErrorExists
+	}
+	os.make_directory_all(filepath.dir(orig))
+	src, _ := filepath.join({td, "files", name})
+	if os.rename(src, orig) != nil {
+		return .ErrorIO
+	}
+	os.remove(info_path)
+	return .Success
+}
+
+// Permanently deletes one trashed item and its .trashinfo.
+delete_from_trash :: proc(name: string) -> OperationStatus {
+	context.allocator = context.temp_allocator
+	td := trash_dir()
+	src, _ := filepath.join({td, "files", name})
+	status := delete_path(src)
+	info_path, _ := filepath.join({td, "info", strings.concatenate({name, ".trashinfo"})})
+	os.remove(info_path)
+	return status
+}
+
+empty_trash :: proc() -> OperationStatus {
+	context.allocator = context.temp_allocator
+	td := trash_dir()
+	files, _ := filepath.join({td, "files"})
+	infos, err := os.read_all_directory_by_path(files, context.allocator)
+	if err != nil {
+		return .Success
+	}
+	result := OperationStatus.Success
+	for fi in infos {
+		if delete_from_trash(fi.name) != .Success {
+			result = .ErrorPermission
+		}
+	}
+	return result
 }

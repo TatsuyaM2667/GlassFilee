@@ -22,6 +22,9 @@ ZIG="${ZIG:-zig}"
 [ -x "$HOME/.cache/ame-shell/toolchain/zig-linux-x86_64-0.13.0/zig" ] && ZIG="$HOME/.cache/ame-shell/toolchain/zig-linux-x86_64-0.13.0/zig"
 "$ZIG" build test
 echo "✓ Unit tests passed"
+echo "  Running Odin trash tests (isolated XDG_DATA_HOME)..."
+GF_TEST_DIR="$(mktemp -d)" odin test tests/trash > /dev/null
+echo "✓ Trash tests passed"
 echo ""
 
 # Run integration tests

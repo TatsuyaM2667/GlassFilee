@@ -26,24 +26,6 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_cli_cmd.addArgs(args);
     b.step("run", "Run the CLI tool").dependOn(&run_cli_cmd.step);
 
-    // GUI (GTK4, transparent glass window)
-    const gui_exe = b.addExecutable(.{
-        .name = "gf-gui",
-        .root_source_file = b.path("src/gui/gui.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    gui_exe.root_module.addImport("core", core_mod);
-    gui_exe.addObjectFile(odin_lib);
-    gui_exe.linkLibC();
-    gui_exe.linkSystemLibrary("gtk4");
-    b.installArtifact(gui_exe);
-
-    const run_gui_cmd = b.addRunArtifact(gui_exe);
-    run_gui_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_gui_cmd.addArgs(args);
-    b.step("gui", "Run the GUI").dependOn(&run_gui_cmd.step);
-
     // Tests
     const core_tests = b.addTest(.{
         .root_source_file = b.path("src/core/tests.zig"),

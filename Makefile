@@ -18,6 +18,7 @@ odin-core:
 build: odin-core
 	@echo "Building GlassFilee CLI..."
 	$(ZIG) build
+	odin build src/gui -out:zig-out/bin/gf-gui -o:speed
 
 # Run CLI
 run: build

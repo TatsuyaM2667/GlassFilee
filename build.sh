@@ -56,8 +56,11 @@ echo "  Output: zig-cache/libgfcore.a"
 echo ""
 
 # Build Zig CLI
-echo "[4/4] Building Zig CLI..."
+echo "[4/4] Building Zig CLI + Odin GUI..."
 "$ZIG" build
+
+# GUI (pure Odin: Wayland + FreeType + xkbcommon)
+odin build src/gui -out:zig-out/bin/gf-gui -o:speed
 
 if [ ! -f "zig-out/bin/gf-cli" ]; then
     echo "❌ Error: Failed to build Zig CLI"
