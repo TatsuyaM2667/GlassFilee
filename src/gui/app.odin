@@ -1596,7 +1596,6 @@ on_event :: proc(ev: Ev) -> bool {
 	case .Wheel:
 		app.wheel += ev.wheel
 		app.mx, app.my = ev.x * app.S, ev.y * app.S
-		return true
 	case .Key:
 		on_key(ev)
 		return true
@@ -1705,9 +1704,10 @@ main :: proc() {
 	if !go_to(start) do go_to(app.home)
 	dump_path := os.get_env("GF_DUMP", context.allocator)
 
-	dirty := true
+	dirty, urgent := true, false
 	for app.running && !plat_closed() {
-		if dirty {
+		// clicks/keys draw at once; hover/scroll wait for the compositor's frame callback
+		if dirty && (urgent || plat_can_draw()) {
 			buf, bw, bh := plat_begin()
 			if buf != nil {
 				app.S = f32(plat_scale())
@@ -1719,7 +1719,7 @@ main :: proc() {
 					frame()
 				}
 				plat_present(buf)
-				dirty = false
+				dirty, urgent = false, false
 				if dump_path != "" {
 					dump_frame(dump_path)
 					break
@@ -1733,11 +1733,11 @@ main :: proc() {
 		timeout := -1
 		if app.toast != "" && app.toast_until > ticks_ms() do timeout = int(app.toast_until - ticks_ms()) + 10
 		if dirty do timeout = 16 // waiting for the compositor to release a buffer
-		if !plat_wait(timeout) do break
-		if len(events) == 0 {
-			dirty = true // timeout: toast expired or buffer retry
-			continue
-		}
+		alive, redraw, timed_out := plat_wait(timeout)
+		if !alive do break
+		// timeout = toast expired or retrying a busy buffer
+		if redraw || timed_out do dirty = true
+		if len(events) == 0 do continue
 		// apply events; stop at the first click/key so it gets its own frame
 		n := 0
 		for n < len(events) {
@@ -1746,6 +1746,7 @@ main :: proc() {
 			dirty = true
 			if on_event(ev) {
 				if len(app.pending) > 0 do run_pending()
+				urgent = true
 				break
 			}
 		}

@@ -61,6 +61,7 @@ foreign wlc {
 	wl_pointer_interface:    wl_interface
 	wl_keyboard_interface:   wl_interface
 	wl_registry_interface:   wl_interface
+	wl_callback_interface:   wl_interface
 
 	wl_display_connect :: proc(name: cstring) -> Proxy ---
 	wl_display_get_fd :: proc(d: Proxy) -> c.int ---
@@ -171,6 +172,8 @@ W :: struct {
 	width, height:                                i32, // logical
 	scale:                                        i32,
 	configured, closed:                           bool,
+	redraw:                                       bool, // size/scale/configure changed
+	frame_cb:                                     Proxy, // pending wl_surface.frame callback
 	// buffers
 	pool:                                         Proxy,
 	pool_fd:                                      linux.Fd,
@@ -301,7 +304,7 @@ on_wm :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_arg
 on_xsurface :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
 	if op == 0 {
 		wl_proxy_marshal_flags(w.xsurface, 4, nil, ver(w.xsurface), 0, a[0].u) // ack_configure
-		w.configured = true
+		w.configured, w.redraw = true, true
 	}
 	return 0
 }
@@ -319,7 +322,9 @@ on_toplevel :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]
 
 @(private = "file")
 on_surface :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
-	if op == 2 && a[0].i > 0 do w.scale = a[0].i // preferred_buffer_scale
+	if op == 2 && a[0].i > 0 && a[0].i != w.scale { // preferred_buffer_scale
+		w.scale, w.redraw = a[0].i, true
+	}
 	return 0
 }
 
@@ -329,6 +334,15 @@ on_buffer :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl
 	if op == 0 && b != nil do b.busy = false
 	return 0
 }
+
+@(private = "file")
+on_frame_done :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
+	if target == w.frame_cb do w.frame_cb = nil // the callback object is destroyed by the server
+	return 0
+}
+
+// True when the compositor is ready for a new frame (throttles redraws to the refresh rate).
+plat_can_draw :: proc() -> bool {return w.frame_cb == nil}
 
 @(private = "file")
 on_seat :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_argument) -> c.int {
@@ -617,6 +631,8 @@ plat_present :: proc(b: ^Shm_Buf) {
 	wl_proxy_marshal_flags(s, 1, nil, ver(s), 0, b.proxy, i32(0), i32(0))
 	if ver(s) >= 4 do wl_proxy_marshal_flags(s, 9, nil, ver(s), 0, i32(0), i32(0), w.buf_w, w.buf_h)
 	else do wl_proxy_marshal_flags(s, 2, nil, ver(s), 0, i32(0), i32(0), w.width, w.height)
+	w.frame_cb = wl_proxy_marshal_flags(s, 3, &wl_callback_interface, ver(s), 0, rawptr(nil))
+	listen(w.frame_cb, on_frame_done)
 	wl_proxy_marshal_flags(s, 6, nil, ver(s), 0)
 	b.busy = true
 }
@@ -637,14 +653,17 @@ plat_text_input :: proc(on: bool, rect: [4]i32) {
 	if w.ti_entered do ti_send(on)
 }
 
-// Waits up to timeout_ms (-1 = forever) for input; fills `events`. False if the display died.
-plat_wait :: proc(timeout_ms: int) -> bool {
+// Waits up to timeout_ms (-1 = forever) for input and fills `events`.
+// redraw: the window was configured/rescaled; timed_out: nothing arrived in time.
+// Protocol traffic like buffer releases wakes us but sets neither.
+plat_wait :: proc(timeout_ms: int) -> (alive, redraw, timed_out: bool) {
 	d := w.display
 	for wl_display_prepare_read(d) != 0 do wl_display_dispatch_pending(d)
 	wl_display_flush(d)
-	if len(events) > 0 {
+	if len(events) > 0 || w.redraw {
 		wl_display_cancel_read(d)
-		return true
+		redraw, w.redraw = w.redraw, false
+		return true, redraw, false
 	}
 	t := timeout_ms
 	if w.repeat_key != 0 {
@@ -653,15 +672,18 @@ plat_wait :: proc(timeout_ms: int) -> bool {
 	}
 	pfd := posix.pollfd{fd = posix.FD(wl_display_get_fd(d)), events = {.IN}}
 	if posix.poll(&pfd, 1, c.int(t)) > 0 {
-		if wl_display_read_events(d) < 0 do return false
+		if wl_display_read_events(d) < 0 do return false, false, false
 	} else {
 		wl_display_cancel_read(d)
+		timed_out = true
 	}
-	if wl_display_dispatch_pending(d) < 0 do return false
+	if wl_display_dispatch_pending(d) < 0 do return false, false, false
 	if w.repeat_key != 0 && ticks_ms() >= w.repeat_next {
 		emit_key(w.repeat_key)
 		w.repeat_next = ticks_ms() + i64(1000 / max(w.repeat_rate, 1))
+		timed_out = false
 	}
-	return true
+	redraw, w.redraw = w.redraw, false
+	return true, redraw, timed_out
 }
 
