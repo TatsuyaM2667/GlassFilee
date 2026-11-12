@@ -75,6 +75,7 @@ foreign ft {
 	FT_Set_Pixel_Sizes :: proc(face: FT_Face, w, h: c.uint) -> c.int ---
 	FT_Get_Char_Index :: proc(face: FT_Face, code: c.ulong) -> c.uint ---
 	FT_Load_Glyph :: proc(face: FT_Face, index: c.uint, flags: i32) -> c.int ---
+	FT_Done_Face :: proc(face: FT_Face) -> c.int ---
 	FT_Set_Var_Design_Coordinates :: proc(face: FT_Face, num: c.uint, coords: [^]c.long) -> c.int ---
 }
 
@@ -212,4 +213,62 @@ text_width :: proc(s: string, size: i32, bold := false) -> i32 {
 	w: i32
 	for r in s do w += get_glyph(r, size, bold).adv
 	return w
+}
+
+// A sample sheet for a font file (viewer): its name, then text at a few sizes.
+font_sample :: proc(path: string, width: int, col: Color) -> (img: []u32, w, h: int, ok: bool) {
+	face: FT_Face
+	if FT_New_Face(lib, strings.clone_to_cstring(path, context.temp_allocator), 0, &face) != 0 do return
+	defer FT_Done_Face(face)
+	Line :: struct {s: string, size: i32}
+	name := strings.concatenate({string(face.family_name), " ", string(face.style_name)}, context.temp_allocator)
+	lines := []Line {
+		{name, 22},
+		{"Aa Bb Cc Dd Ee Ff Gg 0123456789", 44},
+		{"あいうえお アイウエオ 漢字 かな", 40},
+		{"The quick brown fox jumps over the lazy dog.", 28},
+		{"いろはにほへと ちりぬるを わかよたれそ つねならむ", 24},
+		{"!@#$%^&*()_+-=[]{};:'\",.<>/?", 20},
+	}
+	w = width
+	pad := 24
+	for l in lines do h += int(l.size) * 2
+	h += pad * 2
+	img = make([]u32, w * h)
+	y := pad
+	for l in lines {
+		// skip lines the font can't show (e.g. Japanese in a Latin-only font) instead of boxes
+		missing, total := 0, 0
+		for r in l.s do if r != ' ' {
+			total += 1
+			if FT_Get_Char_Index(face, c.ulong(r)) == 0 do missing += 1
+		}
+		if missing * 2 > total do continue
+		FT_Set_Pixel_Sizes(face, 0, c.uint(l.size))
+		base := y + int(l.size)
+		x := pad
+		for r in l.s {
+			idx := FT_Get_Char_Index(face, c.ulong(r))
+			if FT_Load_Glyph(face, idx, FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT) != 0 do continue
+			slot := face.glyph
+			bm := slot.bitmap
+			gx, gy := x + int(slot.bitmap_left), base - int(slot.bitmap_top)
+			for j in 0 ..< int(bm.rows) {
+				py := gy + j
+				if py < 0 || py >= h do continue
+				for i in 0 ..< int(bm.width) {
+					px_ := gx + i
+					if px_ < 0 || px_ >= w do continue
+					a := u32(bm.buffer[j * int(bm.pitch) + i]) * u32(col.a) / 255
+					if a == 0 do continue
+					img[py * w + px_] = a << 24 | (u32(col.r) * a / 255) << 16 | (u32(col.g) * a / 255) << 8 | u32(col.b) * a / 255
+				}
+			}
+			x += int((slot.advance[0] + 32) >> 6)
+			if x > w - pad do break
+		}
+		y += int(l.size) * 2
+	}
+	ok = true
+	return
 }

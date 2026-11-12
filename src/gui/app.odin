@@ -583,6 +583,9 @@ open_entry :: proc(vi: int) {
 		music_play_entry(vi) // songs play right here, Apple Music style
 		return
 	}
+	if viewer_handles(e) {
+		for v, k in app.view do if v == vi {preview_open(k); return} // built-in viewer
+	}
 	if spawn({"xdg-open", p}) == 0 do toastf("「%s」を開けません", e.name)
 }
 
@@ -1804,14 +1807,7 @@ on_key :: proc(ev: Ev) {
 		return
 	}
 	if pv.open {
-		cols := app.cols if app.grid else 1
-		switch key {
-		case K_SPACE, K_ESCAPE: preview_close()
-		case K_LEFT:            preview_step(-1)
-		case K_RIGHT:           preview_step(1)
-		case K_UP:              preview_step(-cols)
-		case K_DOWN:            preview_step(cols)
-		}
+		viewer_key(key, ctrl)
 		return
 	}
 	if app.menu_open {
@@ -2081,6 +2077,7 @@ main :: proc() {
 	watch_init()
 	load_rules()
 	refresh_devices()
+
 
 
 

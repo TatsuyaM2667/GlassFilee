@@ -31,16 +31,17 @@ Panel :: enum {
 	Lyrics, Queue,
 }
 
-@(private = "file")
+// A video decoded by ffmpeg into raw frames on a worker thread (music videos, viewer).
 Video :: struct {
-	pid:      posix.pid_t,
-	out:      ^os.File, // read end of ffmpeg's stdout
-	th:       ^thread.Thread,
-	lock:     sync.Mutex,
-	frame:    []u32, // latest complete frame (ARGB)
-	fresh:    bool, // a new frame arrived since the last draw
-	stop:     bool,
-	paused:   bool,
+	pid:    posix.pid_t,
+	out:    ^os.File, // read end of ffmpeg's stdout
+	th:     ^thread.Thread,
+	lock:   sync.Mutex,
+	frame:  []u32, // latest complete frame (ARGB)
+	w, h:   int,
+	fresh:  bool, // a new frame arrived since the last draw
+	stop:   bool,
+	paused: bool,
 }
 
 Media :: struct {
@@ -135,12 +136,11 @@ current_lyric :: proc(pos: f64) -> int {
 }
 
 // ---------------------------------------------------------------------------
-// Music video
+// Video decoding (shared by music videos and the viewer)
 
 @(private = "file")
 video_worker :: proc(v: ^Video) {
-	n := VIDEO_W * VIDEO_H
-	buf := make([]u8, n * 4)
+	buf := make([]u8, v.w * v.h * 4)
 	defer delete(buf)
 	for !sync.atomic_load(&v.stop) {
 		got := 0
@@ -157,41 +157,43 @@ video_worker :: proc(v: ^Video) {
 	}
 }
 
-@(private = "file")
-video_start :: proc(at: f64) {
-	r, w, err := os.pipe()
-	if err != nil do return
-	vf := "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2,fps=24"
+// Starts decoding path from `at` seconds, letterboxed into w×h, paced at playback speed.
+vid_open :: proc(path: string, at: f64, w, h: int) -> ^Video {
+	r, wr, err := os.pipe()
+	if err != nil do return nil
+	vf := fmt_vf(w, h)
 	p, perr := os.process_start({
 		// -re paces decoding at playback speed, so frames arrive when they should be shown
-		command = {"ffmpeg", "-v", "error", "-nostdin", "-re", "-ss", fmt_f(at), "-i", md.mv, "-an", "-vf", vf, "-pix_fmt", "bgra", "-f", "rawvideo", "-"},
-		stdout  = w,
+		command = {"ffmpeg", "-v", "error", "-nostdin", "-re", "-ss", fmt_f(at), "-i", path, "-an", "-vf", vf, "-pix_fmt", "bgra", "-f", "rawvideo", "-"},
+		stdout  = wr,
 	})
-	os.close(w)
+	os.close(wr)
 	if perr != nil {
 		os.close(r)
-		return
+		return nil
 	}
 	when ODIN_OS == .Linux {
 		if p.handle != 0 && p.handle != ~uintptr(0) do posix.close(posix.FD(p.handle))
 	}
 	v := new(Video)
-	v.pid, v.out = posix.pid_t(p.pid), r
-	v.frame = make([]u32, VIDEO_W * VIDEO_H)
+	v.pid, v.out, v.w, v.h = posix.pid_t(p.pid), r, w, h
+	v.frame = make([]u32, w * h)
 	v.th = thread.create_and_start_with_poly_data(v, video_worker)
-	md.video = v
+	return v
 }
 
 @(private = "file")
+fmt_vf :: proc(w, h: int) -> string {
+	return strings.concatenate({"scale=", itoa_tmp(w), ":", itoa_tmp(h), ":force_original_aspect_ratio=decrease,pad=", itoa_tmp(w), ":", itoa_tmp(h), ":(ow-iw)/2:(oh-ih)/2,fps=24"}, context.temp_allocator)
+}
+
 fmt_f :: proc(f: f64) -> string {
 	buf: [32]u8
 	return strings.clone(strconv.write_float(buf[:], f, 'f', 2, 64), context.temp_allocator)
 }
 
-video_stop :: proc() {
-	v := md.video
+vid_close :: proc(v: ^Video) {
 	if v == nil do return
-	md.video = nil
 	sync.atomic_store(&v.stop, true)
 	posix.kill(v.pid, .SIGCONT)
 	posix.kill(v.pid, .SIGTERM)
@@ -204,35 +206,43 @@ video_stop :: proc() {
 	free(v)
 }
 
-video_pause :: proc(paused: bool) {
-	if v := md.video; v != nil {
-		posix.kill(v.pid, .SIGSTOP if paused else .SIGCONT)
-		v.paused = paused
-	}
+vid_pause :: proc(v: ^Video, paused: bool) {
+	if v == nil do return
+	posix.kill(v.pid, .SIGSTOP if paused else .SIGCONT)
+	v.paused = paused
 }
 
-// Keeps the decoder running exactly while Now Playing shows the video.
-video_sync :: proc() {
-	want := mu.full && md.mv != "" && mu.pid != 0
-	if want && md.video == nil do video_start(music_pos())
-	else if !want && md.video != nil do video_stop()
-}
+vid_fresh :: proc(v: ^Video) -> bool {return v != nil && sync.atomic_load(&v.fresh)}
 
-// True when a new video frame is waiting (main loop: redraw).
-video_fresh :: proc() -> bool {
-	v := md.video
-	return v != nil && sync.atomic_load(&v.fresh)
-}
-
-draw_video :: proc(r: Rect) -> bool {
-	v := md.video
+vid_draw :: proc(v: ^Video, r: Rect) -> bool {
 	if v == nil do return false
 	sync.mutex_lock(&v.lock)
-	blit_scaled(r, v.frame, VIDEO_W, VIDEO_H)
+	blit_scaled(r, v.frame, v.w, v.h)
 	sync.atomic_store(&v.fresh, false)
 	sync.mutex_unlock(&v.lock)
 	return true
 }
+
+// Music video in Now Playing ------------------------------------------------
+
+video_stop :: proc() {
+	vid_close(md.video)
+	md.video = nil
+}
+
+video_pause :: proc(paused: bool) {vid_pause(md.video, paused)}
+
+// Keeps the decoder running exactly while Now Playing shows the video.
+video_sync :: proc() {
+	want := mu.full && md.mv != "" && mu.pid != 0
+	if want && md.video == nil do md.video = vid_open(md.mv, music_pos(), VIDEO_W, VIDEO_H)
+	else if !want && md.video != nil do video_stop()
+}
+
+// True when a new video frame is waiting (main loop: redraw).
+video_fresh :: proc() -> bool {return vid_fresh(md.video) || vid_fresh(pv.video)}
+
+draw_video :: proc(r: Rect) -> bool {return vid_draw(md.video, r)}
 
 // ---------------------------------------------------------------------------
 // Folder play (right-click a folder → 音楽を再生)

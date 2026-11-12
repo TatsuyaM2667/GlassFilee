@@ -76,3 +76,13 @@ lrc_parse :: proc(t: ^testing.T) {
 	testing.expect_value(t, lines[4].text, "chorus")
 	testing.expect_value(t, lines[4].t, 29.5) // [00:30:00] variant
 }
+
+@(test)
+xml_text_extract :: proc(t: ^testing.T) {
+	b := strings.builder_make(context.temp_allocator)
+	xml_text(`<w:document><w:body><w:p><w:r><w:t>見出し</w:t></w:r></w:p><w:p><w:t>A &amp; B</w:t><w:tab/><w:t>&lt;x&gt;</w:t></w:p></w:body></w:document>`, &b)
+	testing.expect_value(t, strings.to_string(b), "見出し\nA & B\t<x>\n")
+	h := strings.builder_make(context.temp_allocator)
+	xml_text(`<html><head><title>T</title><style>p{color:red}</style></head><body><p>本文</p><script>var x=1;</script><br/>次</body></html>`, &h)
+	testing.expect_value(t, strings.to_string(h), "本文\n\n次")
+}
