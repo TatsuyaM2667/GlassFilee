@@ -90,20 +90,37 @@ rrect :: proc(r: Rect, rad: f32, c: Color, ring: f32 = 0) {
 	y1 := min(i32(math.ceil(r.y + r.h)), cv.clip[3])
 	cx, cy := r.x + r.w / 2, r.y + r.h / 2
 	hx, hy := r.w / 2 - rad, r.h / 2 - rad
+	edge_px :: #force_inline proc(x, y: i32, cx, hx, qy, rad, ring: f32, c: Color) {
+		qx := abs(f32(x) + 0.5 - cx) - hx
+		d: f32
+		if qx > 0 && qy > 0 {
+			d = math.sqrt(qx * qx + qy * qy) - rad
+		} else {
+			d = max(qx, qy) - rad
+		}
+		cov := clamp(0.5 - d, 0, 1)
+		if ring > 0 do cov -= clamp(0.5 - d - ring, 0, 1)
+		if cov > 0 do blend(&cv.px[y * cv.stride + x], c, u32(cov * 255))
+	}
 	for y in y0 ..< y1 {
 		qy := abs(f32(y) + 0.5 - cy) - hy
-		for x in x0 ..< x1 {
-			qx := abs(f32(x) + 0.5 - cx) - hx
-			d: f32
-			if qx > 0 && qy > 0 {
-				d = math.sqrt(qx * qx + qy * qy) - rad
-			} else {
-				d = max(qx, qy) - rad
+		// rows away from the corners: only the left/right edges need anti-aliasing,
+		// the middle is solid (filled) or, for a ring, empty (skipped)
+		if qy < -0.5 && qy - rad < -(ring + 1) {
+			m := min(0, rad - ring - 1)
+			ix0 := max(i32(math.ceil(cx - (hx + m) - 0.5)), x0)
+			ix1 := min(i32(math.floor(cx + (hx + m) - 0.5)) + 1, x1)
+			if ix1 > ix0 {
+				for x in x0 ..< ix0 do edge_px(x, y, cx, hx, qy, rad, ring, c)
+				if ring <= 0 {
+					row := cv.px[y * cv.stride:]
+					for x in ix0 ..< ix1 do blend(&row[x], c, 255)
+				}
+				for x in ix1 ..< x1 do edge_px(x, y, cx, hx, qy, rad, ring, c)
+				continue
 			}
-			cov := clamp(0.5 - d, 0, 1)
-			if ring > 0 do cov -= clamp(0.5 - d - ring, 0, 1)
-			if cov > 0 do blend(&cv.px[y * cv.stride + x], c, u32(cov * 255))
 		}
+		for x in x0 ..< x1 do edge_px(x, y, cx, hx, qy, rad, ring, c)
 	}
 }
 
@@ -245,6 +262,67 @@ ring_seg :: proc(cx, cy, r0, r1, a0, a1: f32, c: Color) {
 				if cov <= 0 do continue
 			}
 			blend(&cv.px[y * cv.stride + x], c, u32(cov * 255))
+		}
+	}
+}
+
+// Bilinear resize into a new premultiplied image (for caching scaled pictures).
+scale_image :: proc(src: []u32, sw, sh, w, h: int, allocator := context.allocator) -> []u32 {
+	out := make([]u32, w * h, allocator)
+	sx, sy := f32(sw) / f32(w), f32(sh) / f32(h)
+	for y in 0 ..< h {
+		fy := clamp((f32(y) + 0.5) * sy - 0.5, 0, f32(sh - 1))
+		iy := int(fy)
+		iy1 := min(iy + 1, sh - 1)
+		wy := u32((fy - f32(iy)) * 256)
+		for x in 0 ..< w {
+			fx := clamp((f32(x) + 0.5) * sx - 0.5, 0, f32(sw - 1))
+			ix := int(fx)
+			ix1 := min(ix + 1, sw - 1)
+			wx := u32((fx - f32(ix)) * 256)
+			a, b := src[iy * sw + ix], src[iy * sw + ix1]
+			c, d := src[iy1 * sw + ix], src[iy1 * sw + ix1]
+			s: u32
+			for sh8 := u32(0); sh8 < 32; sh8 += 8 {
+				top := ((a >> sh8) & 255) * (256 - wx) + ((b >> sh8) & 255) * wx
+				bot := ((c >> sh8) & 255) * (256 - wx) + ((d >> sh8) & 255) * wx
+				s |= ((top * (256 - wy) + bot * wy) >> 16) << sh8
+			}
+			out[y * w + x] = s
+		}
+	}
+	return out
+}
+
+// Blends a premultiplied image at (x, y) without scaling (cheap: no sampling).
+blit_image :: proc(x, y: f32, img: []u32, w, h: int) {
+	ox, oy := i32(math.round(x)), i32(math.round(y))
+	x0 := max(ox, cv.clip[0])
+	y0 := max(oy, cv.clip[1])
+	x1 := min(ox + i32(w), cv.clip[2])
+	y1 := min(oy + i32(h), cv.clip[3])
+	for py in y0 ..< y1 {
+		src := img[int(py - oy) * w:]
+		dst := cv.px[py * cv.stride:]
+		for px_ in x0 ..< x1 {
+			s := src[px_ - ox]
+			sa := s >> 24
+			if sa == 255 && draw_alpha == 255 {
+				dst[px_] = s
+				continue
+			}
+			if draw_alpha != 255 {
+				t: u32
+				for sh8 := u32(0); sh8 < 32; sh8 += 8 do t |= ((((s >> sh8) & 255) * draw_alpha + 127) / 255) << sh8
+				s = t
+				sa = s >> 24
+			}
+			// premultiplied "over", two channels per multiply (SWAR), /256 instead of /255
+			inv := 256 - sa
+			dd := dst[px_]
+			rb := ((dd & 0x00ff00ff) * inv >> 8) & 0x00ff00ff
+			ag := ((dd >> 8) & 0x00ff00ff) * inv & 0xff00ff00
+			dst[px_] = s + rb + ag
 		}
 	}
 }

@@ -1239,7 +1239,10 @@ frame :: proc() {
 
 	ph := player_height()
 	area := Rect{cx, app.header_h, W - cx, H - app.header_h - ph}
-	if app.split {
+	// Now Playing fully open covers the panes: don't spend time drawing what can't be seen
+	covered := mu.full && now_s() - mu.full_t0 > 0.45
+	if covered {
+	} else if app.split {
 		// clicking into the inactive pane makes it the active one
 		if app.pressed && !app.blocked && contains(pane_rect(area, app.other.is_right), app.mx, app.my) do swap_panes()
 		draw_pane(pane_rect(area, app.is_right), true)
@@ -1253,7 +1256,7 @@ frame :: proc() {
 	} else {
 		draw_pane(area, true)
 	}
-	draw_player({cx, H - ph, W - cx, ph})
+	if !covered do draw_player({cx, H - ph, W - cx, ph})
 
 	app.blocked = app.menu_open || app.dialog != .None || pv.open || dn.open
 	draw_now_playing({cx, app.header_h, W - cx, H - app.header_h})
@@ -2139,7 +2142,10 @@ main :: proc() {
 		if dirty do timeout = 16 // waiting for the compositor to release a buffer
 		if len(jobs) > 0 && (timeout < 0 || timeout > 100) do timeout = 100 // poll children + spinner
 		if app.walking do timeout = 0 // keep searching between events
-		if music_playing() && !mu.paused && (timeout < 0 || timeout > 80) do timeout = 80 // equalizer + clock
+		// playing: the mini player's equalizer at ~12 fps; Now Playing only needs its clock
+		// and seek bar (4 fps) — lyrics scrolling and video drive their own frames
+		tick := 250 if mu.full else 80
+		if music_playing() && !mu.paused && (timeout < 0 || timeout > tick) do timeout = tick
 		for deadline in ([]i64{refresh_at, other_refresh_at, rules_deadline()}) {
 			if deadline == 0 do continue
 			d := int(max(deadline - ticks_ms(), 0))
@@ -2152,7 +2158,11 @@ main :: proc() {
 		watch_set(dirs[:])
 		if len(jobs) > 0 do update_progress()
 		alive, redraw, timed_out := plat_wait(timeout, watch_fds())
-		if !alive do break
+		if !alive {
+			e, iface, id, code := plat_error()
+			fmt.eprintfln("Ame-FileManager: lost the Wayland connection (errno %d, protocol error %d on %s#%d)", e, code, iface, id)
+			break
+		}
 		for d in watch_poll() {
 			if d == app.cwd do refresh_at = ticks_ms() + 150
 			if app.split && d == app.other.cwd do other_refresh_at = ticks_ms() + 150

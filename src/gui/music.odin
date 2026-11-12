@@ -381,6 +381,8 @@ meta_free :: proc() {
 	delete(m.cover)
 	free(m)
 	mu.meta = nil
+	// caches keyed by this Meta must not match a future one at the same address
+	bd.key, art.key = nil, nil
 }
 
 @(private = "file")
@@ -452,11 +454,61 @@ song_title :: proc() -> (title, sub: string) {
 	return
 }
 
+// Blurred-art backdrop, composited once per cover and size (blur, darkening, bottom
+// gradient), then just blended each frame.
+@(private = "file") bd: struct {
+	px:   []u32,
+	w, h: int,
+	key:  rawptr,
+}
+
+@(private = "file")
+backdrop :: proc(r: Rect, m: ^Meta) {
+	w, h := int(r.w), int(r.h)
+	if bd.key != m || bd.w != w || bd.h != h {
+		delete(bd.px)
+		bd.px = scale_image(m.blur[:], 16, 16, w, h)
+		bd.w, bd.h, bd.key = w, h, m
+		for y in 0 ..< h {
+			// layers: art at 88 %, black 41 %, then a darkening ramp on the lower half
+			t := clamp((f32(y) / f32(h) - 0.45) / 0.55, 0, 1)
+			g := t * t * 0.43
+			keep := 0.88 * (1 - 0.41) * (1 - g)
+			alpha := 1 - (1 - 0.88) * (1 - 0.41) * (1 - g)
+			a8 := u32(alpha * 255)
+			row := bd.px[y * w:][:w]
+			for &c in row {
+				rr := u32(f32((c >> 16) & 255) * keep)
+				gg := u32(f32((c >> 8) & 255) * keep)
+				bb := u32(f32(c & 255) * keep)
+				c = a8 << 24 | rr << 16 | gg << 8 | bb
+			}
+		}
+	}
+	blit_image(r.x, r.y, bd.px, bd.w, bd.h)
+}
+
+@(private = "file") art: struct {
+	px:   []u32,
+	w, h: int,
+	key:  rawptr,
+}
+
 @(private = "file")
 cover_or_placeholder :: proc(r: Rect, radius: f32) {
 	m := mu.meta
 	if m != nil && sync.atomic_load(&m.done) && m.cover != nil {
-		blit_scaled(r, m.cover, m.cw, m.ch)
+		w, h := int(math.round(r.w)), int(math.round(r.h))
+		if art.key == m && art.w == w && art.h == h {
+			blit_image(r.x, r.y, art.px, w, h)
+		} else if app.animating {
+			blit_scaled(r, m.cover, m.cw, m.ch) // size still changing: sample directly
+		} else {
+			delete(art.px)
+			art.px = scale_image(m.cover, m.cw, m.ch, w, h)
+			art.w, art.h, art.key = w, h, m
+			blit_image(r.x, r.y, art.px, w, h)
+		}
 		rrect(r, radius, hex(0xffffff, 30), px(1))
 		return
 	}
@@ -620,21 +672,7 @@ draw_now_playing :: proc(area: Rect) {
 
 	// living backdrop: the blurred art drifts slowly behind everything, darker toward the bottom
 	if ready && m.cover != nil {
-		t := app.now * 0.12
-		bw, bh := r.w * 1.5, r.h * 1.5
-		bx := r.x - r.w * 0.25 + f32(math.sin(t)) * r.w * 0.12
-		by := r.y - r.h * 0.25 + f32(math.cos(t * 0.8)) * r.h * 0.10
-		draw_alpha = 225
-		blit_scaled({bx, by, bw, bh}, m.blur[:], 16, 16)
-		draw_alpha = 255
-		fill(r, hex(0x000000, 105))
-		// smooth darkening toward the bottom (2 px steps: no visible bands)
-		y0 := r.y + r.h * 0.45
-		for y := y0; y < r.y + r.h; y += px(2) {
-			t := (y - y0) / (r.y + r.h - y0)
-			fill({r.x, y, r.w, px(2)}, hex(0x000000, u8(t * t * 110)))
-		}
-		if music_playing() && !mu.paused do app.animating = mu.full // keep it drifting while playing
+		backdrop(r, m)
 	} else {
 		fill(r, hex(0x0b0f1c, 225))
 	}
@@ -684,18 +722,18 @@ draw_now_playing :: proc(area: Rect) {
 	bar_y -= lift
 	info_y -= lift
 	small := Rect{L.x + margin, L.y + px(58), px(64) * (16.0 / 9 if md.mv != "" else 1), px(64)}
-	art := lerp_rect(big, small, k)
+	art_r := lerp_rect(big, small, k)
 	radius := px(12) - px(4) * k
-	for i in 0 ..< 10 { // soft shadow: many faint layers spreading out
+	for i in 1 ..< 10 { // soft shadow: faint rings spreading out (rings: the art covers the middle)
 		g := px(f32(i) * 3)
-		rrect({art.x - g, art.y - g + px(14), art.w + 2 * g, art.h + 2 * g}, radius + g, hex(0x000000, 9))
+		rrect({art_r.x - g, art_r.y - g + px(14), art_r.w + 2 * g, art_r.h + 2 * g}, radius + g, hex(0x000000, 9), g + px(14))
 	}
-	if !draw_video(art) do cover_or_placeholder(art, radius)
+	if !draw_video(art_r) do cover_or_placeholder(art_r, radius)
 
 	// text and seek bar line up with the art's edges while it is big (like Apple Music)
 	cx0 := big.x + (L.x + margin - big.x) * k
 	cw := big.w + (colw - big.w) * k
-	// title / artist: under the big art, or next to the thumbnail
+	// title / artist: under the big art_r, or next to the thumbnail
 	title, sub := song_title()
 	if k < 0.99 {
 		draw_alpha = u32((1 - k) * 255)

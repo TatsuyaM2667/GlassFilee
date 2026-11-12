@@ -75,6 +75,8 @@ foreign wlc {
 	wl_display_read_events :: proc(d: Proxy) -> c.int ---
 	wl_display_cancel_read :: proc(d: Proxy) ---
 	wl_display_flush :: proc(d: Proxy) -> c.int ---
+	wl_display_get_error :: proc(d: Proxy) -> c.int ---
+	wl_display_get_protocol_error :: proc(d: Proxy, iface: ^^wl_interface, id: ^u32) -> u32 ---
 	wl_proxy_marshal_flags :: proc(p: Proxy, opcode: u32, iface: ^wl_interface, version: u32, flags: u32, #c_vararg args: ..any) -> Proxy ---
 	wl_proxy_add_dispatcher :: proc(p: Proxy, f: Dispatcher, impl: rawptr, data: rawptr) -> c.int ---
 	wl_proxy_get_version :: proc(p: Proxy) -> u32 ---
@@ -927,7 +929,19 @@ plat_resize :: proc(e: Edge) {
 // Enable the IME with the caret rectangle in logical px (or disable it).
 plat_text_input :: proc(on: bool, rect: [4]i32) {
 	if w.ti == nil do return
-	if on == w.ti_on && (!on || rect == w.ti_rect) do return
+	if on == w.ti_on {
+		// caret moved (e.g. while composing): only update the rectangle. Re-sending
+		// "enable" resets the IME and threw away Japanese text being composed.
+		if on && rect != w.ti_rect {
+			w.ti_rect = rect
+			if w.ti_entered {
+				t := w.ti
+				wl_proxy_marshal_flags(t, 6, nil, ver(t), 0, rect[0], rect[1], rect[2], rect[3])
+				wl_proxy_marshal_flags(t, 7, nil, ver(t), 0)
+			}
+		}
+		return
+	}
 	w.ti_on, w.ti_rect = on, rect
 	if w.ti_entered do ti_send(on)
 }
@@ -975,3 +989,12 @@ plat_wait :: proc(timeout_ms: int, extra: []posix.FD = nil) -> (alive, redraw, t
 	return true, redraw, timed_out
 }
 
+
+// Why the connection died (for the exit message).
+plat_error :: proc() -> (errno: int, iface: string, id: u32, code: u32) {
+	errno = int(wl_display_get_error(w.display))
+	ip: ^wl_interface
+	code = wl_display_get_protocol_error(w.display, &ip, &id)
+	if ip != nil do iface = string(ip.name)
+	return
+}
