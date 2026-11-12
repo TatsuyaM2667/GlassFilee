@@ -26,7 +26,9 @@ _watch_drain :: proc(changed: ^[dynamic]string) {
 		off := 0
 		for off + size_of(linux.Inotify_Event) <= int(n) {
 			ev := (^linux.Inotify_Event)(&buf[off])
-			watch_mark(changed, int(ev.wd))
+			// hidden files nobody is looking at (e.g. apps rewriting ~/.something) don't need a reload
+			hidden := ev.len > 0 && buf[off + size_of(linux.Inotify_Event)] == '.'
+			if !hidden || app.show_hidden do watch_mark(changed, int(ev.wd))
 			off += size_of(linux.Inotify_Event) + int(ev.len)
 		}
 	}

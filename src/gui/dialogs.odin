@@ -100,7 +100,7 @@ draw_props :: proc(W, H: f32) {
 	info, _ := os.lstat(first, context.temp_allocator)
 	multi := len(props.names) > 1
 	is := px(64)
-	if info.type == .Directory && !multi do folder_icon(r.x + px(24), r.y + px(24), is, 0, tags[first])
+	if info.type == .Directory && !multi do folder_icon(r.x + px(24), r.y + px(24), is, 0, tint_of_mask(file_tags[first]))
 	else do file_icon(r.x + px(24), r.y + px(24), is, kind_of(first, info.mode))
 	title := fmt.tprintf("%d 個のアイテム", len(props.names)) if multi else filepath.base(first)
 	text(r.x + px(104), r.y + px(52), ellipsize(title, fs(16), r.w - px(128), true), fs(16), FG, true)
@@ -205,6 +205,7 @@ batch_apply :: proc() {
 	for t, i in tmps {
 		if os.rename(t, full_path(news[i])) == nil {
 			append(&undo, [2]string{full_path(olds[i]), full_path(news[i])})
+			tags_moved(full_path(olds[i]), full_path(news[i]))
 		} else {
 			os.rename(t, full_path(olds[i]))
 		}

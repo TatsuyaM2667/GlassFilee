@@ -76,6 +76,7 @@ Act :: enum {
 	Terminal, Hidden, Reload, Empty_Trash, Sort, Dialog_Ok, Dialog_Cancel, Close, Extract, Compress,
 	New_Tab, Close_Tab, Switch_Tab, Next_Tab, Convert, Preview, Split, Undo,
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
+	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle,
 }
 
 Pending :: struct {
@@ -85,7 +86,7 @@ Pending :: struct {
 }
 
 Dialog :: enum {
-	None, Rename, Mkdir, Compress, Confirm_Delete, Confirm_Empty_Trash, Props, Batch_Rename,
+	None, Rename, Mkdir, Compress, Confirm_Delete, Confirm_Empty_Trash, Props, Batch_Rename, Tag_Edit, Tag_Pick,
 }
 
 Focus :: enum {
@@ -143,6 +144,8 @@ Pane :: struct {
 	search:            Edit,
 	searching:         bool,
 	git:               map[string]u8, // git status of entries (first path component)
+	expanded:          map[string]f32, // tree view: expanded folders (rel name -> time expanded)
+	tree_loaded:       map[string]bool, // tree view: folders whose children are in entries
 }
 
 App :: struct {
@@ -156,6 +159,7 @@ App :: struct {
 	home, trash_files: string,
 	places:            [dynamic]Place,
 	grid, show_hidden: bool,
+	tree:              bool, // tree view (Obsidian-style); grid is false then
 	sort:              Sort_Key,
 	sort_desc:         bool,
 	now, dt, last_t:   f32,
@@ -273,6 +277,11 @@ kind_of :: proc(name: string, mode: os.Permissions) -> Kind {
 }
 
 load :: proc(path: string) -> bool {
+	if strings.has_prefix(path, "tag:") {
+		virtual.arena_free_all(&app.listing)
+		stop_walk()
+		return load_tag_view(path)
+	}
 	infos, err := os.read_all_directory_by_path(path, context.temp_allocator)
 	if err != nil {
 		toastf("「%s」を開けません", filepath.base(path))
@@ -342,11 +351,11 @@ refilter :: proc() {
 	for e, i in app.entries {
 		if i >= app.base_count && q == "" do break
 		if !app.show_hidden && e.hidden do continue
-		if tag_filter != 0 && tag_of(e.name) != tag_filter do continue
 		if q != "" && !strings.contains(strings.to_lower(filepath.base(e.name), context.temp_allocator), q) do continue
 		append(&app.view, i)
 	}
 	slice.sort_by(app.view[:], entry_less)
+	if tree_mode() do build_tree_view()
 	if app.focus >= len(app.view) do app.focus = len(app.view) - 1
 }
 
@@ -356,8 +365,10 @@ Nav :: enum {
 
 go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 	p := path
-	if !filepath.is_abs(p) do p, _ = filepath.join({app.cwd, p}, context.temp_allocator)
-	p, _ = filepath.clean(p, context.temp_allocator)
+	if !strings.has_prefix(p, "tag:") {
+		if !filepath.is_abs(p) do p, _ = filepath.join({app.cwd, p}, context.temp_allocator)
+		p, _ = filepath.clean(p, context.temp_allocator)
+	}
 	if !load(p) do return false
 	new_cwd := strings.clone(p)
 	switch mode {
@@ -372,6 +383,8 @@ go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 	app.cwd = new_cwd
 	if mode != .Replace {
 		app.scroll, app.scroll_to = 0, 0
+		for k in app.expanded do delete(k)
+		clear(&app.expanded)
 		if !app.split do thumbs_clear() // keep memory to the folder on screen
 		app.nav_t0 = now_s()
 		app.nav_dir = -1 if mode == .Back else 1
@@ -413,12 +426,17 @@ in_trash :: proc() -> bool {
 
 location_name :: proc() -> string {
 	if in_trash() do return "ゴミ箱"
+	if is_tag_view() {
+		id, _ := strconv.parse_uint(app.cwd[4:])
+		if t := tag_by_id(u8(id)); t != nil do return t.name
+	}
 	if app.cwd == app.home do return "ホーム"
 	if app.cwd == "/" do return "/"
 	return filepath.base(app.cwd)
 }
 
 full_path :: proc(name: string) -> string {
+	if is_tag_view() do return strings.concatenate({"/", name}, context.temp_allocator) // names are absolute there
 	p, _ := filepath.join({app.cwd, name}, context.temp_allocator)
 	return p
 }
@@ -470,6 +488,7 @@ unique_dest :: proc(dir, name: string) -> string {
 	ext := filepath.ext(name)
 	stem := name[:len(name) - len(ext)]
 	if strings.has_prefix(name, ".") && ext == name do stem, ext = name, ""
+	if os.is_dir(dst) do stem, ext = name, "" // folders have no extension: "R-4.5.1 (コピー)", not "R-4.5 (コピー).1"
 	for n := 1; ; n += 1 {
 		label := "(コピー)" if n == 1 else fmt.tprintf("(コピー %d)", n)
 		dst, _ = filepath.join({dir, fmt.tprintf("%s %s%s", stem, label, ext)}, context.temp_allocator)
@@ -580,7 +599,8 @@ name_problem :: proc(name: string, allow := "", dir := "") -> string {
 	if strings.contains_rune(name, '/') do return "名前に「/」は使えません"
 	if name == "." || name == ".." do return "その名前は使えません"
 	if name != allow {
-		if p, _ := filepath.join({app.cwd, dir, name}, context.temp_allocator); os.exists(p) do return "同じ名前のアイテムが既にあります"
+		rel, _ := filepath.join({dir, name}, context.temp_allocator)
+		if os.exists(full_path(rel)) do return "同じ名前のアイテムが既にあります"
 	}
 	if strings.has_prefix(name, ".") && !strings.has_prefix(allow, ".") do return "" // allowed, will be hidden
 	return ""
@@ -642,6 +662,10 @@ dialog_ok :: proc() {
 		if in_trash() do reload()
 	case .Batch_Rename:
 		batch_apply()
+	case .Tag_Edit:
+		tag_edit_ok()
+	case .Tag_Pick:
+		app.dialog = .None
 	case .Props:
 		props_close()
 		app.dialog = .None
@@ -672,7 +696,7 @@ begin_rename :: proc() {
 }
 
 begin_mkdir :: proc() {
-	if in_trash() do return
+	if in_trash() || is_tag_view() do return
 	app.dialog = .Mkdir
 	edit_set(&app.dlg_edit, "名称未設定フォルダー", true)
 	app.edit_focus = .Dialog
@@ -723,20 +747,22 @@ run_pending :: proc() {
 				app.edit_focus = .Search
 			}
 			refilter()
-		case .View_Grid: app.grid = true
-		case .View_List: app.grid = false
+		case .View_Grid: app.grid, app.tree = true, false
+		case .View_List: app.grid, app.tree = false, false; refilter()
+		case .View_Tree: app.grid, app.tree = false, true; refilter()
+		case .Tree_Toggle: if p.i >= 0 && p.i < len(app.entries) do tree_toggle(p.i)
 		case .Main_Menu: open_menu(p.i, true)
 		case .Context:   open_menu(p.i, false)
 		case .Copy:      clip_selection(false)
 		case .Cut:       clip_selection(true)
-		case .Paste:     if !in_trash() do do_paste()
+		case .Paste:     if !in_trash() && !is_tag_view() do do_paste()
 		case .Rename:    begin_rename()
 		case .Trash:     do_trash()
 		case .Delete:    if len(selection()) > 0 do app.dialog = .Confirm_Delete
 		case .Restore:   do_restore()
 		case .Mkdir:     begin_mkdir()
 		case .Select_All: for vi in app.view do app.entries[vi].sel = true
-		case .Terminal:  open_terminal()
+		case .Terminal:  if !is_tag_view() do open_terminal()
 		case .Hidden:
 			app.show_hidden = !app.show_hidden
 			refilter()
@@ -776,9 +802,19 @@ run_pending :: proc() {
 			add_bookmark(path)
 		case .Remove_Bookmark: remove_bookmark(side_menu_path)
 		case .Props:  props_open()
-		case .Rule:   donut_open_rule(app.menu_pos.x, app.menu_pos.y)
+		case .Rule:   if !is_tag_view() do donut_open_rule(app.menu_pos.x, app.menu_pos.y)
 		case .Unrule: remove_rule(app.cwd)
 		case .Play_All: music_play_folder(0)
+		case .Tag_Pick: if len(selection()) > 0 do app.dialog = .Tag_Pick
+		case .Tag_New:  tag_begin_edit(-1)
+		case .Tag_Rename:
+			id := menu_tag_id
+			if id < 0 && is_tag_view() {
+				v, _ := strconv.parse_uint(app.cwd[4:])
+				id = int(v)
+			}
+			if id >= 0 do tag_begin_edit(id)
+		case .Tag_Delete: if menu_tag_id >= 0 do delete_tag(u8(menu_tag_id))
 		case .Undo:  do_undo()
 		case .Preview:
 			sel := selection()
@@ -796,7 +832,7 @@ run_pending :: proc() {
 		case .Extract:   for vi in selection() do extract(vi)
 		case .Compress:
 			sel := selection()
-			if len(sel) == 0 || in_trash() do break
+			if len(sel) == 0 || in_trash() || is_tag_view() do break
 			name := "アーカイブ"
 			if len(sel) == 1 do name, _, _ = archive_kind(app.entries[sel[0]].name)
 			if len(sel) == 1 && name == "" do name = app.entries[sel[0]].name
@@ -822,6 +858,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		sep()
 		add("アイコン表示", .View_Grid, "Ctrl+2")
 		add("一覧表示", .View_List, "Ctrl+1")
+		add("ツリー表示", .View_Tree, "Ctrl+3")
 		add("2画面表示を閉じる" if app.split else "2画面表示", .Split, "F3")
 		add("隠しファイルを隠す" if app.show_hidden else "隠しファイルを表示", .Hidden, "Ctrl+H")
 		add("再読み込み", .Reload, "F5")
@@ -846,10 +883,14 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("名前を変更…" if n == 1 else "まとめて名前を変更…", .Rename, "F2")
 		if n == 1 && app.entries[vi].is_dir do add("ブックマークに追加", .Bookmark, "Ctrl+D")
 		add("プロパティ", .Props, "Ctrl+I")
+		add("タグ…", .Tag_Pick)
 		append(&app.menu_items, Menu_Item{label = "色", colors = true, ok = true})
 		sep()
 		add("ゴミ箱へ移動", .Trash, "Delete")
 		add("完全に削除…", .Delete, "Shift+Delete")
+	} else if is_tag_view() {
+		add("すべて選択", .Select_All, "Ctrl+A")
+		add("タグを編集…", .Tag_Rename)
 	} else if in_trash() {
 		add("すべて選択", .Select_All, "Ctrl+A")
 		add("ゴミ箱を空にする", .Empty_Trash, "", len(app.view) > 0)
@@ -866,11 +907,19 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		if r := rule_for(app.cwd); r != nil do add(fmt.tprintf("自動変換を停止（→ %s）", r.target.label), .Unrule)
 		else do add("自動変換を設定…", .Rule)
 	}
-	if vi == -2 {
+	if vi == -2 && menu_tag_id >= 0 {
+		// sidebar tag: edit it; the arc picks its color
+		clear(&app.menu_items)
+		add("タグを編集…", .Tag_Rename)
+		add("タグを削除", .Tag_Delete)
+		append(&app.menu_items, Menu_Item{label = "色", colors = true, ok = true})
+	} else if vi == -2 {
 		// sidebar row
 		clear(&app.menu_items)
 		add("新しいタブで開く", .New_Tab)
 		for b in bookmarks do if b.path == side_menu_path do add("ブックマークを削除", .Remove_Bookmark)
+	} else {
+		menu_tag_id = -1
 	}
 	app.menu_open, app.menu_main = true, main_menu
 	app.prev_menu = false // restart the opening animation even if a menu was still fading out
@@ -966,7 +1015,7 @@ active_edit :: proc() -> ^Edit {
 	switch app.edit_focus {
 	case .Path:   return &app.path_edit
 	case .Search: return &app.search
-	case .Dialog: return &app.dlg_edit if app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress || app.dialog == .Batch_Rename else nil
+	case .Dialog: return &app.dlg_edit if app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress || app.dialog == .Batch_Rename || app.dialog == .Tag_Edit else nil
 	case .None:
 	}
 	return nil
@@ -1112,19 +1161,21 @@ item_rect :: proc(k: int) -> Rect {
 		cw := (app.body.w - 2 * pad) / f32(app.cols)
 		return {pad + f32(k % app.cols) * cw, pad + f32(k / app.cols) * px(GRID_CELL_H), cw, px(GRID_CELL_H)}
 	}
+	if tree_mode() do return {0, px(TREE_HEAD) + px(4) + f32(k) * px(TREE_ROW), app.body.w, px(TREE_ROW)}
 	return {0, px(LIST_HEAD_H) + f32(k) * px(LIST_ROW_H), app.body.w, px(LIST_ROW_H)}
 }
 
 content_height :: proc() -> f32 {
 	n := len(app.view)
 	if app.grid do return px(24) + f32((n + app.cols - 1) / max(app.cols, 1)) * px(GRID_CELL_H)
+	if tree_mode() do return px(TREE_HEAD) + f32(n) * px(TREE_ROW) + px(48)
 	return px(LIST_HEAD_H) + f32(n) * px(LIST_ROW_H) + px(48)
 }
 
 ensure_visible :: proc(k: int) {
 	if k < 0 || app.body.h <= 0 do return
 	r := item_rect(k)
-	top := px(LIST_HEAD_H) if !app.grid else 0
+	top := px(TREE_HEAD) if tree_mode() else (px(LIST_HEAD_H) if !app.grid else 0)
 	if r.y - top < app.scroll_to do app.scroll_to = r.y - top
 	if r.y + r.h > app.scroll_to + app.body.h do app.scroll_to = r.y + r.h - app.body.h
 }
@@ -1204,6 +1255,8 @@ frame :: proc() {
 	case .None:
 	case .Props:        draw_props(W, H)
 	case .Batch_Rename: draw_batch(W, H)
+	case .Tag_Edit:     draw_tag_edit(W, H)
+	case .Tag_Pick:     draw_tag_pick(W, H)
 	case:               draw_dialog(W, H)
 	}
 	draw_preview(W, H)
@@ -1232,7 +1285,10 @@ draw_header :: proc(r: Rect) {
 	if clicked(cr) do push(.Close)
 	right -= bs + px(8)
 	right -= bs
-	if icon_button({right, y, bs, bs}, I_LIST if app.grid else I_GRID) do push(.View_List if app.grid else .View_Grid)
+	next_icon, next_act := rune(I_LIST), Act.View_List
+	if !app.grid && !app.tree do next_icon, next_act = I_SITEMAP, .View_Tree
+	if app.tree do next_icon, next_act = I_GRID, .View_Grid
+	if icon_button({right, y, bs, bs}, next_icon) do push(next_act)
 	right -= bs + px(2)
 	if icon_button({right, y, bs, bs}, I_SEARCH, app.searching) do push(.Search)
 	if visible_jobs() || app.walking {
@@ -1269,7 +1325,9 @@ draw_pathbar :: proc(bar: Rect) {
 		icon:  rune,
 	}
 	segs := make([dynamic]Seg, context.temp_allocator)
-	if in_trash() {
+	if is_tag_view() {
+		append(&segs, Seg{location_name(), app.cwd, I_TAG})
+	} else if in_trash() {
 		append(&segs, Seg{"ゴミ箱", app.trash_files, I_TRASH})
 	} else {
 		rest := app.cwd
@@ -1383,25 +1441,38 @@ draw_body :: proc() {
 		}
 	}
 
-	if !app.grid {
-		draw_list_header(b)
-	}
+	tree := tree_mode()
+	head_h, row_h := px(LIST_HEAD_H), px(LIST_ROW_H)
+	if tree do head_h, row_h = px(TREE_HEAD), px(TREE_ROW)
+	if tree do draw_tree_header(b)
+	else if !app.grid do draw_list_header(b)
 	first, last := 0, n
 	if app.grid {
 		rh := px(GRID_CELL_H)
 		first = max(0, int((app.scroll - px(12)) / rh) * app.cols)
 		last = min(n, (int((app.scroll + b.h) / rh) + 2) * app.cols)
 	} else {
-		first = max(0, int((app.scroll - px(LIST_HEAD_H)) / px(LIST_ROW_H)))
-		last = min(n, first + int(b.h / px(LIST_ROW_H)) + 2)
+		first = max(0, int((app.scroll - head_h) / row_h))
+		last = min(n, first + int(b.h / row_h) + 2)
 	}
-	if !app.grid do set_clip({b.x, b.y + px(LIST_HEAD_H), b.w, b.h - px(LIST_HEAD_H)})
+	if !app.grid do set_clip({b.x, b.y + head_h, b.w, b.h - head_h})
 	for k in first ..< last {
 		vi := app.view[k]
 		e := &app.entries[vi]
 		ir := item_rect(k)
 		r := Rect{bx + ir.x, by + ir.y, ir.w, ir.h}
 		ip := progress(app.nav_t0 + f32(min(k - first, 30)) * 0.016, 0.3)
+		if tree {
+			// children of a just-expanded folder slide in one after another
+			if slash := strings.last_index_byte(e.name, '/'); slash > 0 {
+				parent := e.name[:slash]
+				if t0, ok := app.expanded[parent]; ok {
+					pk := k - 1 // the parent row sits above its children
+					for pk > 0 && app.entries[app.view[pk]].name != parent do pk -= 1
+					ip = min(ip, progress(t0 + f32(min(k - pk, 20)) * 0.018, 0.22))
+				}
+			}
+		}
 		if ip < 1 {
 			draw_alpha = u32(ip * 255)
 			r.x += (1 - ip) * px(22) * app.nav_dir
@@ -1416,18 +1487,20 @@ draw_body :: proc() {
 			rrect(hit, px(10 if app.grid else 8), with_alpha(ACCENT, 60))
 			rrect(hit, px(10 if app.grid else 8), ACCENT, px(2))
 		}
-		if e.sel do rrect(hit, px(10 if app.grid else 8), SEL)
-		else if hov do rrect(hit, px(10 if app.grid else 8), HOVER)
+		if e.sel do rrect(hit, px(10 if app.grid else (6 if tree else 8)), with_alpha(OBSIDIAN, 70) if tree else SEL)
+		else if hov do rrect(hit, px(10 if app.grid else (6 if tree else 8)), HOVER)
 		col := with_alpha(FG, 150) if e.hidden else FG
-		if app.grid {
+		if tree {
+			draw_tree_row(e, r, hit, hov)
+		} else if app.grid {
 			is := px(64)
 			ix, iy := r.x + (r.w - is) / 2, r.y + px(8)
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video) do th = thumb_get(full_path(e.name), e.mtime, e.kind == .Video)
-			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)), tag_of(e.name))
+			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)), tint_of(e.name))
 			else if th != nil do draw_thumb(ix, iy, is, th, e.kind == .Video)
 			else do file_icon(ix, iy, is, e.kind)
-			if !e.is_dir do tag_dot(ix + px(6), iy + px(10), px(6), tag_of(e.name)) // folders show it as their own color
+			if !e.is_dir do file_tag_dots(ix + px(6), iy + px(10), px(6), e.name) // folders show it as their own color
 			git_dot(ix + is - px(4), iy + is - px(6), px(6), e.name)
 			if len(jobs) > 0 {if f := converting(e.name); f >= 0 do progress_ring({ix, iy, is, is}, f)}
 			if e.is_link do glyph_center({ix + is - px(20), iy + is - px(20), px(20), px(20)}, I_LINK, fs(12), FG)
@@ -1441,10 +1514,10 @@ draw_body :: proc() {
 			ix, iy := r.x + px(16), r.y + (r.h - is) / 2
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video) do th = thumb_get(full_path(e.name), e.mtime, e.kind == .Video)
-			if e.is_dir do folder_icon(ix, iy, is, 0, tag_of(e.name))
+			if e.is_dir do folder_icon(ix, iy, is, 0, tint_of(e.name))
 			else if th != nil do draw_thumb(ix, iy, is, th, false)
 			else do file_icon(ix, iy, is, e.kind)
-			if !e.is_dir do tag_dot(ix + px(2), iy + px(4), px(5), tag_of(e.name))
+			if !e.is_dir do file_tag_dots(ix + px(2), iy + px(4), px(5), e.name)
 			git_dot(ix + is, iy + is - px(2), px(5), e.name)
 			if len(jobs) > 0 {if f := converting(e.name); f >= 0 do progress_ring({ix, iy, is, is}, f)}
 			size := fs(14)
@@ -1480,7 +1553,9 @@ draw_body :: proc() {
 					app.idrag_on, app.idrag_x, app.idrag_y = true, app.mx, app.my
 				}
 				app.focus = k
-				if app.clicks >= 2 && !ctrl && !shift {
+				if tree && e.is_dir && !ctrl && !shift {
+					if app.clicks == 1 do push(.Tree_Toggle, vi) // like Obsidian: a click folds/unfolds
+				} else if app.clicks >= 2 && !ctrl && !shift {
 					clear_sel()
 					e.sel = true
 					push(.Open, vi)
@@ -1609,7 +1684,7 @@ draw_dialog :: proc(W, H: f32) {
 	case .Confirm_Empty_Trash:
 		title = "ゴミ箱を空にしますか？"
 		body, ok, style = "ゴミ箱内のすべてのアイテムが完全に削除されます。", "ゴミ箱を空にする", 2
-	case .None, .Props, .Batch_Rename: // drawn by draw_props / draw_batch
+	case .None, .Props, .Batch_Rename, .Tag_Edit, .Tag_Pick: // drawn elsewhere
 	}
 	tsize := fs(16)
 	tw := f32(text_width(title, tsize, true))
@@ -1784,6 +1859,11 @@ on_key :: proc(ev: Ev) {
 	case ctrl && key == K_H: push(.Hidden)
 	case ctrl && key == K_1: push(.View_List)
 	case ctrl && key == K_2: push(.View_Grid)
+	case ctrl && key == K_3: push(.View_Tree)
+	case tree_mode() && (key == K_RIGHT || key == K_LEFT) && app.focus >= 0:
+		vi := app.view[app.focus]
+		e := app.entries[vi]
+		if e.is_dir && (e.name in app.expanded) != (key == K_RIGHT) do push(.Tree_Toggle, vi)
 	case ctrl && key == K_A: push(.Select_All)
 	case ctrl && key == K_C: push(.Copy)
 	case ctrl && key == K_X: push(.Cut)
@@ -1988,6 +2068,7 @@ main :: proc() {
 
 
 
+
 	dirty, urgent := true, false
 	refresh_at, other_refresh_at: i64 // debounced reloads after directory changes
 	for app.running && !plat_closed() {
@@ -2185,6 +2266,7 @@ MAX_SEARCH_RESULTS :: 5000
 
 stop_walk :: proc() {
 	virtual.arena_free_all(&app.search_arena)
+	clear(&app.tree_loaded) // its keys and the tree's child entries lived in that arena
 	app.walk_stack = {}
 	app.walk_q = ""
 	app.walking = false

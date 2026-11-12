@@ -1,6 +1,7 @@
 package main
 
 import "core:os"
+import "core:sys/posix"
 import "core:strings"
 import "core:testing"
 
@@ -35,4 +36,26 @@ flatten_test :: proc(t: ^testing.T) {
 	_ = os.write_entire_file_from_string(j(base, "/two/y.txt"), "y")
 	flatten(j(base, "/two"))
 	testing.expect(t, os.exists(j(base, "/two/x")) && os.exists(j(base, "/two/y.txt")))
+}
+
+@(test)
+tags_follow_renames :: proc(t: ^testing.T) {
+	base := os.get_env("GF_TEST_DIR", context.temp_allocator)
+	if base == "" do return
+	posix_setenv_config(base) // save_tags writes into the scratch dir, never the real config
+	file_tags[strings.clone("/a/dir")] = 1 << 2
+	file_tags[strings.clone("/a/dir/x.txt")] = 1 << 3
+	file_tags[strings.clone("/a/dirx")] = 1 << 4 // shares the prefix but is a different folder
+	tags_moved("/a/dir", "/b/new")
+	testing.expect_value(t, file_tags["/b/new"], u64(1 << 2))
+	testing.expect_value(t, file_tags["/b/new/x.txt"], u64(1 << 3))
+	testing.expect_value(t, file_tags["/a/dirx"], u64(1 << 4))
+	testing.expect(t, "/a/dir" not_in file_tags)
+	append(&tag_list, Tag{2, 0, "無色"}, Tag{3, 5, "青"})
+	testing.expect_value(t, tint_of_mask(1 << 2 | 1 << 3), u8(5)) // first *colored* tag wins
+}
+
+@(private = "file")
+posix_setenv_config :: proc(base: string) {
+	posix.setenv("XDG_CONFIG_HOME", strings.clone_to_cstring(base, context.temp_allocator), true)
 }

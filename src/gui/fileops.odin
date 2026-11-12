@@ -98,6 +98,7 @@ reap_ops :: proc() -> bool {
 			toast_undo(fmt_items(len(ok), "移動しました" if op.move else "コピーしました"))
 		}
 		if len(ok) > 0 do push_undo(.Move if op.move else .Copy, ok[:])
+		if op.move do for pr in ok do tags_moved(pr[0], pr[1])
 		free_op(op)
 		ordered_remove(&ops, i)
 		done = true
@@ -223,13 +224,14 @@ do_undo :: proc() {
 			if gf.restore_from_trash(pr[1]) != .Success do failed += 1
 		case .Rename:
 			if os.exists(pr[0]) || gf.rename_path(pr[1], pr[0]) != .Success do failed += 1
+			else do tags_moved(pr[1], pr[0])
 		case .Move:
 			// back to where it came from; cross-device moves go through a background op
 			if os.exists(pr[0]) {
 				failed += 1
 			} else if os.rename(pr[1], pr[0]) != nil {
 				start_op({pr[1]}, filepath.dir(pr[0]), true)
-			}
+			} else do tags_moved(pr[1], pr[0])
 		case .Copy:
 			if gf.trash_path(pr[1]) != .Success do failed += 1 // to the trash, not gone forever
 		case .Mkdir:

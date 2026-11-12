@@ -169,89 +169,7 @@ eject_device :: proc(d: Device) {
 }
 
 // ---------------------------------------------------------------------------
-// Color tags (~/.config/ame-filemanager/tags: "<color>\t<absolute path>")
 
-TAG_COLORS := [8]u32{0, 0xf38ba8, 0xfab387, 0xf9e2af, 0xa6e3a1, 0x89b4fa, 0xcba6f7, 0x9399b2}
-TAG_NAMES := [8]string{"", "赤", "オレンジ", "黄", "緑", "青", "紫", "グレー"}
-tags: map[string]u8
-tag_filter: u8
-
-// ~/.config/ame-filemanager (moved over from the old "glassfilee" name once).
-app_config_dir :: proc() -> string {
-	base, _ := os.user_config_dir(context.temp_allocator)
-	dir, _ := filepath.join({base, "ame-filemanager"}, context.temp_allocator)
-	old, _ := filepath.join({base, "glassfilee"}, context.temp_allocator)
-	if !os.exists(dir) && os.is_dir(old) do _ = os.rename(old, dir)
-	return dir
-}
-
-@(private = "file")
-tags_file :: proc() -> string {
-	p, _ := filepath.join({app_config_dir(), "tags"}, context.temp_allocator)
-	return p
-}
-
-load_tags :: proc() {
-	data, err := os.read_entire_file_from_path(tags_file(), context.temp_allocator)
-	if err != nil do return
-	text := string(data)
-	for line in strings.split_lines_iterator(&text) {
-		c, _, path := strings.partition(line, "\t")
-		if len(c) == 1 && c[0] >= '1' && c[0] <= '7' && path != "" do tags[strings.clone(path)] = c[0] - '0'
-	}
-}
-
-@(private = "file")
-save_tags :: proc() {
-	b := strings.builder_make(context.temp_allocator)
-	for path, c in tags {
-		strings.write_byte(&b, '0' + c)
-		strings.write_byte(&b, '\t')
-		strings.write_string(&b, path)
-		strings.write_byte(&b, '\n')
-	}
-	p := tags_file()
-	_ = os.make_directory_all(filepath.dir(p))
-	_ = os.write_entire_file_from_string(p, strings.to_string(b))
-}
-
-tag_of :: proc(name: string) -> u8 {
-	if len(tags) == 0 do return 0
-	return tags[full_path(name)]
-}
-
-// Sets color c on the selection (0, or the color it already has, clears it).
-set_tag :: proc(c: u8) {
-	sel := selection()
-	if len(sel) == 0 do return
-	all_same := true
-	for vi in sel do if tag_of(app.entries[vi].name) != c do all_same = false
-	for vi in sel {
-		p := full_path(app.entries[vi].name)
-		if c == 0 || all_same {
-			if p in tags {
-				k, _ := delete_key(&tags, p)
-				delete(k)
-			}
-		} else if p in tags {
-			tags[p] = c
-		} else {
-			tags[strings.clone(p)] = c
-		}
-	}
-	save_tags()
-	refilter()
-}
-
-tag_dot :: proc(x, y, r: f32, c: u8) {
-	if c == 0 do return
-	rrect({x - r, y - r, 2 * r, 2 * r}, r, hex(0x10141f, 230))
-	rrect({x - r + px(1.5), y - r + px(1.5), 2 * r - px(3), 2 * r - px(3)}, r, hex(TAG_COLORS[c]))
-}
-
-// ---------------------------------------------------------------------------
-
-@(private = "file")
 side_row :: proc(y: ^f32, w: f32, icon: rune, label: string, active: bool, dim := false) -> Rect {
 	r := Rect{px(6), y^, w - px(12), px(36)}
 	if active do rrect(r, px(6), ACTIVE)
@@ -263,7 +181,6 @@ side_row :: proc(y: ^f32, w: f32, icon: rune, label: string, active: bool, dim :
 	return r
 }
 
-@(private = "file")
 side_section :: proc(y: ^f32, w: f32, title: string) {
 	y^ += px(6)
 	fill({px(12), y^, w - px(24), 1}, LINE)
@@ -294,6 +211,7 @@ draw_sidebar :: proc(w, H: f32) {
 		if clicked(r) do push(.Navigate, 0, path)
 		if hovering(r) && app.pressed && app.button == 2 do push(.New_Tab, 0, path)
 		if hovering(r) && app.pressed && app.button == 3 {
+			menu_tag_id = -1
 			delete(side_menu_path)
 			side_menu_path = strings.clone(path)
 			push(.Side_Menu)
@@ -324,22 +242,6 @@ draw_sidebar :: proc(w, H: f32) {
 		if clicked(er) do eject_device(d)
 		else do nav(r, d.path)
 	}
-	// tags that are in use
-	used: [8]bool
-	for _, c in tags do used[c] = true
-	any_used := false
-	for u in used[1:] do any_used ||= u
-	if any_used {
-		side_section(&y, w, "色")
-		for c in u8(1) ..= 7 {
-			if !used[c] do continue
-			r := side_row(&y, w, 0, TAG_NAMES[c], tag_filter == c)
-			folder_icon(r.x + px(10), r.y + px(8), px(20), 0, c)
-			if clicked(r) {
-				tag_filter = 0 if tag_filter == c else c
-				refilter()
-			}
-		}
-	}
+	draw_sidebar_tags(&y, w)
 }
 

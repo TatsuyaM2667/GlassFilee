@@ -36,7 +36,7 @@ in_repo :: proc(dir: string) -> bool {
 
 git_refresh :: proc() {
 	clear_git(&app.git)
-	if !have_tool("git") || app.cwd == "" || !in_repo(app.cwd) do return
+	if !have_tool("git") || app.cwd == "" || is_tag_view() || !in_repo(app.cwd) do return
 	r := new(Git_Req)
 	r.cwd = strings.clone(app.cwd)
 	r.th = thread.create_and_start_with_poly_data(r, git_worker)

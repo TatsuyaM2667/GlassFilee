@@ -142,6 +142,7 @@ K_D :: 'd'
 K_I :: 'i'
 K_1 :: '1'
 K_2 :: '2'
+K_3 :: '3'
 
 Mod :: enum {
 	Ctrl, Shift, Alt,

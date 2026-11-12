@@ -26,6 +26,8 @@ act_icon :: proc(a: Act) -> rune {
 	case .Paste:           return 0xf0ea
 	case .Rename:          return 0xf040
 	case .Bookmark:        return I_BOOKMARK
+	case .Tag_Pick, .Tag_New, .Tag_Rename: return I_TAG
+	case .Tag_Delete:      return 0xf014
 	case .Remove_Bookmark: return 0xf097
 	case .Props:           return 0xf05a
 	case .Trash, .Empty_Trash: return I_TRASH
@@ -48,7 +50,7 @@ act_icon :: proc(a: Act) -> rune {
 }
 
 @(private = "file")
-danger :: proc(a: Act) -> bool {return a == .Delete || a == .Empty_Trash}
+danger :: proc(a: Act) -> bool {return a == .Delete || a == .Empty_Trash || a == .Tag_Delete}
 
 // Slices = menu items without separators and the color row.
 @(private = "file")
@@ -165,9 +167,10 @@ draw_menu :: proc() {
 
 	// tag colors on an arc under the ring
 	color_hover := -1
+	arc := arc_items() if has_colors else nil
 	if has_colors && !closing {
-		for c in 0 ..< 8 {
-			a := math.PI / 2 + (f32(c) - 3.5) * 0.17
+		for item, c in arc {
+			a := math.PI / 2 + (f32(c) - f32(len(arc) - 1) / 2) * 0.17
 			rr := r1 + px(24)
 			dx, dy := cx + math.cos(a) * rr, cy + math.sin(a) * rr
 			sp := clamp(p * 1.6 - 0.4 - f32(c) * 0.04, 0, 1)
@@ -177,11 +180,10 @@ draw_menu :: proc() {
 				ring_seg(dx, dy, 0, px(12), 0, 2 * math.PI, HOVER)
 			}
 			draw_alpha = u32(sp * 255)
-			if c == 0 do glyph_center(hit, I_CLOSE, fs(10), DIM)
-			else do tag_dot(dx, dy, px(7) * (0.5 + 0.5 * sp), u8(c))
+			tag_dot(dx, dy, px(7) * (0.5 + 0.5 * sp), item.color, item.on)
 			draw_alpha = u32(clamp(p * 1.3, 0, 1) * 255)
 			if clicked(hit) {
-				set_tag(u8(c))
+				arc_click(c)
 				menu_close(-1)
 			}
 		}
@@ -194,7 +196,10 @@ draw_menu :: proc() {
 		it := app.menu_items[idx[hover]]
 		title, key = it.label, it.key
 	}
-	if color_hover >= 0 do title = "色を戻す" if color_hover == 0 else strings.concatenate({"色: ", TAG_NAMES[color_hover]}, context.temp_allocator)
+	if color_hover >= 0 && color_hover < len(arc) {
+		item := arc[color_hover]
+		title = strings.concatenate({item.label, " ✓" if item.on else ""}, context.temp_allocator)
+	}
 	tsize := fs(12)
 	t := ellipsize(title, tsize, (r0 - px(6)) * 1.8, true)
 	tw := f32(text_width(t, tsize, true))
