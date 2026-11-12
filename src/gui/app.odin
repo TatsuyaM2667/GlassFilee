@@ -386,6 +386,7 @@ go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 	case .Replace: delete(app.cwd)
 	}
 	app.cwd = new_cwd
+	apply_folder_prefs(p)
 	if mode != .Replace {
 		app.scroll, app.scroll_to = 0, 0
 		for k in app.expanded do delete(k)
@@ -782,27 +783,27 @@ run_pending :: proc() {
 			if app.sort == k do app.sort_desc = !app.sort_desc
 			else {app.sort = k; app.sort_desc = k != .Name}
 			refilter()
-			save_view_prefs()
+			remember_sort()
 		case .Sort_Menu:  open_sort_menu()
 		case .Group_Menu: open_group_menu()
 		case .Sort_By:
 			app.sort = Sort_Key(p.i)
 			app.sort_desc = app.sort == .Modified || app.sort == .Created || app.sort == .Accessed || app.sort == .Size // newest / biggest first
 			refilter()
-			save_view_prefs()
+			remember_sort()
 			toastf("%sで並べ替え（%s）", SORT_NAMES[app.sort], "降順" if app.sort_desc else "昇順")
 		case .Sort_Dir:
 			app.sort_desc = !app.sort_desc
 			refilter()
-			save_view_prefs()
+			remember_sort()
 		case .Dirs_First:
 			app.dirs_first = !app.dirs_first
 			refilter()
-			save_view_prefs()
+			remember_sort()
 		case .Group_By:
 			app.group = Group_By(p.i)
 			refilter()
-			save_view_prefs()
+			remember_sort()
 		case .Dialog_Ok: dialog_ok()
 		case .Dialog_Cancel:
 			if app.dialog == .Props do props_close()
@@ -2394,6 +2395,7 @@ step_walk :: proc(budget_ms: i64 = 6) -> bool {
 
 swap_panes :: proc() {
 	app.pane, app.other = app.other, app.pane
+	apply_folder_prefs(app.cwd) // header/menus show the now-active folder's order
 }
 
 pane_rect :: proc(area: Rect, right: bool) -> Rect {

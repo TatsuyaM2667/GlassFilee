@@ -112,3 +112,36 @@ test_sort_and_group :: proc(t: ^testing.T) {
 	app.group = .Ext
 	testing.expect(t, entry_less(2, 0)) // PNG group before TXT group
 }
+
+@(test)
+test_folder_sort_memory :: proc(t: ^testing.T) {
+	tmp := "/tmp/ame-fm-test-prefs"
+	_ = os.remove_all(tmp)
+	defer _ = os.remove_all(tmp)
+	old_xdg := os.get_env("XDG_CONFIG_HOME", context.temp_allocator)
+	posix.setenv("XDG_CONFIG_HOME", "/tmp/ame-fm-test-prefs", true) // never touch the user's config
+	defer {
+		if old_xdg != "" do posix.setenv("XDG_CONFIG_HOME", strings.clone_to_cstring(old_xdg, context.temp_allocator), true)
+		else do posix.unsetenv("XDG_CONFIG_HOME")
+	}
+	saved_cwd := app.cwd
+	defer app.cwd = saved_cwd
+
+	load_view_prefs() // nothing saved: defaults
+	testing.expect(t, app.dirs_first)
+	app.cwd = "/music"
+	app.sort, app.sort_desc, app.group = .Size, true, .Ext
+	remember_sort()
+	app.cwd = "/docs"
+	app.sort, app.sort_desc, app.group = .Modified, false, .None
+	remember_sort()
+
+	load_view_prefs()
+	apply_folder_prefs("/music")
+	testing.expect_value(t, app.sort, Sort_Key.Size)
+	testing.expect_value(t, app.group, Group_By.Ext)
+	testing.expect(t, app.sort_desc)
+	apply_folder_prefs("/elsewhere") // unseen folder: the last choice
+	testing.expect_value(t, app.sort, Sort_Key.Modified)
+	testing.expect(t, !app.sort_desc)
+}

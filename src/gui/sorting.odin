@@ -284,6 +284,7 @@ view_conf :: proc() -> string {
 
 load_view_prefs :: proc() {
 	app.dirs_first = true
+	defer {default_pref = current_pref(); load_folder_prefs()}
 	data, err := os.read_entire_file_from_path(view_conf(), context.temp_allocator)
 	if err != nil do return
 	text := string(data)
@@ -306,6 +307,65 @@ save_view_prefs :: proc() {
 	p := view_conf()
 	_ = os.make_directory_all(filepath.dir(p))
 	_ = os.write_entire_file_from_string(p, s)
+}
+
+// Per-folder order: folders.conf holds one "sort\tdesc\tdirs\tgroup\tpath" line per
+// folder the user changed; other folders use the last choice made anywhere.
+
+Sort_Pref :: struct {
+	sort:  Sort_Key,
+	desc:  bool,
+	dirs:  bool,
+	group: Group_By,
+}
+
+@(private = "file") default_pref: Sort_Pref
+@(private = "file") folder_prefs: map[string]Sort_Pref
+
+@(private = "file")
+current_pref :: proc() -> Sort_Pref {return {app.sort, app.sort_desc, app.dirs_first, app.group}}
+
+@(private = "file")
+folders_conf :: proc() -> string {
+	p, _ := filepath.join({app_config_dir(), "folders.conf"}, context.temp_allocator)
+	return p
+}
+
+apply_folder_prefs :: proc(path: string) {
+	pr, ok := folder_prefs[path]
+	if !ok do pr = default_pref
+	app.sort, app.sort_desc, app.dirs_first, app.group = pr.sort, pr.desc, pr.dirs, pr.group
+}
+
+// The user changed the order here: remember it for this folder and as the default.
+remember_sort :: proc() {
+	pr := current_pref()
+	default_pref = pr
+	if app.cwd != "" && !strings.contains(app.cwd, "\n") {
+		if app.cwd in folder_prefs do folder_prefs[app.cwd] = pr
+		else do folder_prefs[strings.clone(app.cwd)] = pr
+	}
+	save_view_prefs()
+	b := strings.builder_make(context.temp_allocator)
+	for path, f in folder_prefs {
+		fmt.sbprintf(&b, "%v\t%d\t%d\t%v\t%s\n", f.sort, int(f.desc), int(f.dirs), f.group, path)
+	}
+	_ = os.write_entire_file_from_string(folders_conf(), strings.to_string(b))
+}
+
+@(private = "file")
+load_folder_prefs :: proc() {
+	data, err := os.read_entire_file_from_path(folders_conf(), context.temp_allocator)
+	if err != nil do return
+	text := string(data)
+	for line in strings.split_lines_iterator(&text) {
+		f := strings.split_n(line, "\t", 5, context.temp_allocator)
+		if len(f) != 5 || f[4] == "" do continue
+		pr := Sort_Pref{dirs = f[2] != "0", desc = f[1] == "1"}
+		for s in Sort_Key do if fmt.tprint(s) == f[0] do pr.sort = s
+		for g in Group_By do if fmt.tprint(g) == f[3] do pr.group = g
+		folder_prefs[strings.clone(f[4])] = pr
+	}
 }
 
 // Radial menus for sorting and grouping.
