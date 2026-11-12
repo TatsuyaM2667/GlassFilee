@@ -76,7 +76,7 @@ Act :: enum {
 	Terminal, Hidden, Reload, Empty_Trash, Sort, Dialog_Ok, Dialog_Cancel, Close, Extract, Compress,
 	New_Tab, Close_Tab, Switch_Tab, Next_Tab, Convert, Preview, Split, Undo,
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
-	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle,
+	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry,
 }
 
 Pending :: struct {
@@ -579,8 +579,9 @@ open_entry :: proc(vi: int) {
 		go_to(p)
 		return
 	}
-	if is_audio(e) && is_music_folder() {
-		for v, k in app.view do if v == vi {music_play_folder(k); return}
+	if is_audio(e) {
+		music_play_entry(vi) // songs play right here, Apple Music style
+		return
 	}
 	if spawn({"xdg-open", p}) == 0 do toastf("「%s」を開けません", e.name)
 }
@@ -805,6 +806,7 @@ run_pending :: proc() {
 		case .Rule:   if !is_tag_view() do donut_open_rule(app.menu_pos.x, app.menu_pos.y)
 		case .Unrule: remove_rule(app.cwd)
 		case .Play_All: music_play_folder(0)
+		case .Play_Entry: if p.i >= 0 && p.i < len(app.entries) do music_play_entry(p.i)
 		case .Tag_Pick: if len(selection()) > 0 do app.dialog = .Tag_Pick
 		case .Tag_New:  tag_begin_edit(-1)
 		case .Tag_Rename:
@@ -1199,7 +1201,7 @@ frame :: proc() {
 	clear_canvas(BG)
 	clear(&app.hdr_hot)
 	app.header_h = px(47)
-	app.blocked = app.menu_open || app.dialog != .None || pv.open || dn.open
+	app.blocked = app.menu_open || app.dialog != .None || pv.open || dn.open || mu.full
 	if app.released do app.band_on = false
 	if app.idrag_on {
 		if app.released || !app.held {
@@ -1249,6 +1251,8 @@ frame :: proc() {
 	}
 	draw_player({cx, H - ph, W - cx, ph})
 
+	app.blocked = app.menu_open || app.dialog != .None || pv.open || dn.open
+	draw_now_playing({cx, app.header_h, W - cx, H - app.header_h})
 	app.blocked = false
 	if app.menu_open do draw_menu()
 	#partial switch app.dialog {
@@ -1503,6 +1507,7 @@ draw_body :: proc() {
 			if !e.is_dir do file_tag_dots(ix + px(6), iy + px(10), px(6), e.name) // folders show it as their own color
 			git_dot(ix + is - px(4), iy + is - px(6), px(6), e.name)
 			if len(jobs) > 0 {if f := converting(e.name); f >= 0 do progress_ring({ix, iy, is, is}, f)}
+			if is_now_playing(e.name) do eq_badge(ix + is - px(14), iy + is - px(18), px(16))
 			if e.is_link do glyph_center({ix + is - px(20), iy + is - px(20), px(20), px(20)}, I_LINK, fs(12), FG)
 			size := fs(14)
 			l1, l2 := wrap2(filepath.base(e.name), size, hit.w - px(8))
@@ -1519,6 +1524,7 @@ draw_body :: proc() {
 			else do file_icon(ix, iy, is, e.kind)
 			if !e.is_dir do file_tag_dots(ix + px(2), iy + px(4), px(5), e.name)
 			git_dot(ix + is, iy + is - px(2), px(5), e.name)
+			if is_now_playing(e.name) do eq_badge(ix + is - px(8), iy + is - px(12), px(12))
 			if len(jobs) > 0 {if f := converting(e.name); f >= 0 do progress_ring({ix, iy, is, is}, f)}
 			size := fs(14)
 			bl := baseline(r, size)
@@ -1553,6 +1559,9 @@ draw_body :: proc() {
 					app.idrag_on, app.idrag_x, app.idrag_y = true, app.mx, app.my
 				}
 				app.focus = k
+				if is_audio(e^) && !ctrl && !shift && app.clicks == 1 {
+					push(.Play_Entry, vi) // one click plays
+				}
 				if tree && e.is_dir && !ctrl && !shift {
 					if app.clicks == 1 do push(.Tree_Toggle, vi) // like Obsidian: a click folds/unfolds
 				} else if app.clicks >= 2 && !ctrl && !shift {
@@ -1782,6 +1791,7 @@ on_key :: proc(ev: Ev) {
 	key := ev.key
 	ctrl, shift, alt := .Ctrl in ev.mods, .Shift in ev.mods, .Alt in ev.mods
 
+	if app.dialog == .None && app.edit_focus == .None && music_key(key) do return
 	if dn.open {
 		if !dn.closing do donut_key(key)
 		return
@@ -2069,6 +2079,7 @@ main :: proc() {
 
 
 
+
 	dirty, urgent := true, false
 	refresh_at, other_refresh_at: i64 // debounced reloads after directory changes
 	for app.running && !plat_closed() {
@@ -2087,6 +2098,7 @@ main :: proc() {
 		}
 		if rules_tick() do dirty = true
 		if git_poll() do dirty = true
+		if music_poll() do dirty = true
 		if app.walking {
 			if step_walk() do refilter()
 			dirty = true

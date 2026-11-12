@@ -76,4 +76,3 @@ watch_poll :: proc() -> [dynamic]string {
 	_watch_drain(&changed)
 	return changed
 }
-

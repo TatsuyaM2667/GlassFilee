@@ -136,6 +136,8 @@ draw_tree_row :: proc(e: ^Entry, r, hit: Rect, hov: bool) {
 			draw_alpha = saved
 		}
 		folder_icon(x + px(18), cy - px(9), px(18), 0, tint_of(e.name))
+	} else if is_now_playing(e.name) {
+		eq_badge(x + px(20), cy - px(7), px(14))
 	} else {
 		glyph_center({x + px(16), r.y, px(22), r.h}, KIND_GLYPH[e.kind], fs(12), hex(KIND_COLOR[e.kind], 220))
 	}
