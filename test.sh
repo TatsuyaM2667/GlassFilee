@@ -23,9 +23,10 @@ ZIG="${ZIG:-zig}"
 "$ZIG" build test
 echo "✓ Unit tests passed"
 echo "  Running Odin trash tests (isolated XDG_DATA_HOME)..."
-GF_TEST_DIR="$(mktemp -d)" odin test tests/trash > /dev/null
+# one thread: both tests share the isolated trash
+GF_TEST_DIR="$(mktemp -d)" odin test tests/trash -define:ODIN_TEST_THREADS=1 > /dev/null
 echo "✓ Trash tests passed"
-GF_TEST_DIR="$(mktemp -d)" odin test src/gui > /dev/null
+GF_TEST_DIR="$(mktemp -d)" odin test src/gui -define:ODIN_TEST_THREADS=1 > /dev/null
 echo "✓ GUI archive tests passed"
 echo ""
 
