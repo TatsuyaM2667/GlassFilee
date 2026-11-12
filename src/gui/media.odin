@@ -252,26 +252,32 @@ music_play_dir :: proc(path: string) {
 draw_lyrics :: proc(r: Rect) {
 	pos := music_pos()
 	cur := current_lyric(pos)
-	line_h := px(46)
+	line_h := px(58)
 	target := f32(max(cur, 0))
 	if d := target - md.lyric_y; abs(d) > 0.001 {
-		md.lyric_y += d * (1 - math.exp(-app.dt * 8))
+		md.lyric_y += d * (1 - math.exp(-app.dt * 7))
 		app.animating = true
 	} else do md.lyric_y = target
 	set_clip(r)
-	defer reset_clip()
-	center := r.y + r.h * 0.38
+	defer set_clip({0, 0, f32(cv.w), f32(cv.h)})
+	// Apple Music style: big bold left-aligned lines, the current one white, the rest
+	// translucent; lines already sung fade faster than the ones coming up
+	anchor := r.y + r.h * 0.3
+	size := fs(26)
 	for ln, i in md.lyrics {
-		y := center + (f32(i) - md.lyric_y) * line_h
+		y := anchor + (f32(i) - md.lyric_y) * line_h
 		if y < r.y - line_h || y > r.y + r.h + line_h do continue
-		dist := abs(f32(i) - md.lyric_y)
+		dist := f32(i) - md.lyric_y
 		is_cur := i == cur
-		size := fs(22) if is_cur else fs(18)
-		a := u8(255 if is_cur else clamp(200 - dist * 38, 50, 170))
-		txt := ln.text if ln.text != "" else "♪"
-		lr := Rect{r.x + px(12), y - line_h / 2, r.w - px(24), line_h}
-		if hovering(lr) && !is_cur do rrect(lr, px(8), HOVER)
-		text(lr.x + px(10), baseline(lr, size), ellipsize(txt, size, lr.w - px(20), true), size, with_alpha(FG, a), true)
+		a: f32 = 1 if is_cur else (0.42 - abs(dist) * 0.05 if dist > 0 else 0.30 - abs(dist) * 0.08)
+		a = clamp(a, 0.08, 1)
+		// soft fade at the panel's top and bottom edges
+		edge := min((y - r.y) / px(60), (r.y + r.h - y) / px(60))
+		a *= clamp(edge, 0, 1)
+		txt := ln.text if ln.text != "" else "• • •"
+		lr := Rect{r.x, y - line_h / 2, r.w, line_h}
+		if hovering(lr) && !is_cur do rrect(lr, px(10), hex(0xffffff, 14))
+		text(lr.x + px(12), baseline(lr, size), ellipsize(txt, size, lr.w - px(24), true), size, with_alpha(FG, u8(a * 255)), true)
 		if clicked(lr) do music_seek(ln.t) // jump to that line
 	}
 }

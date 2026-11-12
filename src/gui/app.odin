@@ -1504,9 +1504,9 @@ draw_body :: proc() {
 			is := px(64)
 			ix, iy := r.x + (r.w - is) / 2, r.y + px(8)
 			th: ^Thumb
-			if !e.is_dir && (e.kind == .Image || e.kind == .Video) do th = thumb_get(full_path(e.name), e.mtime, e.kind == .Video)
+			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
 			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)), tint_of(e.name))
-			else if th != nil do draw_thumb(ix, iy, is, th, e.kind == .Video)
+			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
 			else do file_icon(ix, iy, is, e.kind)
 			if !e.is_dir do file_tag_dots(ix + px(6), iy + px(10), px(6), e.name) // folders show it as their own color
 			git_dot(ix + is - px(4), iy + is - px(6), px(6), e.name)
@@ -1522,9 +1522,9 @@ draw_body :: proc() {
 			is := px(28)
 			ix, iy := r.x + px(16), r.y + (r.h - is) / 2
 			th: ^Thumb
-			if !e.is_dir && (e.kind == .Image || e.kind == .Video) do th = thumb_get(full_path(e.name), e.mtime, e.kind == .Video)
+			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
 			if e.is_dir do folder_icon(ix, iy, is, 0, tint_of(e.name))
-			else if th != nil do draw_thumb(ix, iy, is, th, false)
+			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
 			else do file_icon(ix, iy, is, e.kind)
 			if !e.is_dir do file_tag_dots(ix + px(2), iy + px(4), px(5), e.name)
 			git_dot(ix + is, iy + is - px(2), px(5), e.name)
@@ -2085,6 +2085,7 @@ main :: proc() {
 
 
 
+
 	dirty, urgent := true, false
 	refresh_at, other_refresh_at: i64 // debounced reloads after directory changes
 	for app.running && !plat_closed() {
@@ -2123,7 +2124,7 @@ main :: proc() {
 				plat_present(buf)
 				dirty, urgent = false, false
 				if app.animating do dirty = true // next frame comes with the frame callback
-				if dump_path != "" && !app.animating { // dump the settled frame
+				if dump_path != "" && (!app.animating || frame_no > 60) { // dump the settled frame (or give up waiting)
 					dump_frame(dump_path)
 					break
 				}

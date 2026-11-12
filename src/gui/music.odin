@@ -81,6 +81,8 @@ Music :: struct {
 	full:      bool, // "Now Playing" view
 	full_t0:   f32,
 	art_scale: f32, // the big art shrinks a little while paused, like Apple Music
+	panel_open: bool, // lyrics / Up Next shown (narrow layout: the art becomes a thumbnail)
+	panel_k:   f32, // animated 0..1 for that transition
 	q_scroll:  f32,
 }
 mu: Music
@@ -609,108 +611,214 @@ draw_now_playing :: proc(area: Rect) {
 		mu.full = false
 		return
 	}
-	p := progress(mu.full_t0, 0.38)
+	p := progress(mu.full_t0, 0.4)
 	r := Rect{area.x, area.y + (1 - p) * area.h, area.w, area.h}
 	set_clip(area)
 	defer reset_clip()
 	m := mu.meta
 	ready := m != nil && sync.atomic_load(&m.done)
-	// blurred art as the backdrop (still translucent, like the rest of the window)
+
+	// living backdrop: the blurred art drifts slowly behind everything, darker toward the bottom
 	if ready && m.cover != nil {
-		draw_alpha = 215
-		blit_scaled(r, m.blur[:], 16, 16)
+		t := app.now * 0.12
+		bw, bh := r.w * 1.5, r.h * 1.5
+		bx := r.x - r.w * 0.25 + f32(math.sin(t)) * r.w * 0.12
+		by := r.y - r.h * 0.25 + f32(math.cos(t * 0.8)) * r.h * 0.10
+		draw_alpha = 225
+		blit_scaled({bx, by, bw, bh}, m.blur[:], 16, 16)
 		draw_alpha = 255
-		fill(r, hex(0x060913, 120))
+		fill(r, hex(0x000000, 105))
+		// smooth darkening toward the bottom (2 px steps: no visible bands)
+		y0 := r.y + r.h * 0.45
+		for y := y0; y < r.y + r.h; y += px(2) {
+			t := (y - y0) / (r.y + r.h - y0)
+			fill({r.x, y, r.w, px(2)}, hex(0x000000, u8(t * t * 110)))
+		}
+		if music_playing() && !mu.paused do app.animating = mu.full // keep it drifting while playing
 	} else {
 		fill(r, hex(0x0b0f1c, 225))
 	}
 
-	close_r := Rect{r.x + px(14), r.y + px(12), px(36), px(36)}
-	if icon_button(close_r, I_CHEVRON_DOWN_BIG) do mu.full = false
+	// sheet grabber + close
+	rrect({r.x + r.w / 2 - px(19), r.y + px(8), px(38), px(5)}, px(3), hex(0xffffff, 90))
+	if icon_button({r.x + px(14), r.y + px(14), px(36), px(36)}, I_CHEVRON_DOWN_BIG) do mu.full = false
 
-	wide := r.w > px(760)
-	col_w := r.w * 0.5 if wide else r.w
-	cx := r.x + col_w / 2
-	// art: shrinks a little while paused
+	wide := r.w > px(820)
+	L := Rect{r.x, r.y, r.w * 0.46, r.h} if wide else r
+	margin := px(36)
+	colw := L.w - 2 * margin
+	has_lyrics := len(md.lyrics) > 0
+
+	// panel (lyrics / queue) slides the art into a thumbnail on narrow windows
+	open_target: f32 = 1 if mu.panel_open && !wide else 0
+	if d := open_target - mu.panel_k; abs(d) > 0.002 {
+		mu.panel_k += d * (1 - math.exp(-app.dt * 10))
+		app.animating = true
+	} else do mu.panel_k = open_target
+	k := ease_out(mu.panel_k)
+
+	// bottom block, anchored to the bottom of the column (lifted below when the art is big)
+	row_y := L.y + L.h - px(46) // bottom row of toggles
+	ctl_y := row_y - px(78) // play / prev / next
+	bar_y := ctl_y - px(58) // seek bar
+	info_y := bar_y - px(62) // title / artist (big-art layout)
+
+	// art (or music video), big ↔ thumbnail
 	target: f32 = 1 if music_playing() && !mu.paused else 0.86
 	if d := target - mu.art_scale; abs(d) > 0.002 {
 		mu.art_scale += d * (1 - math.exp(-app.dt * 9))
 		app.animating = true
 	} else do mu.art_scale = target
 	video_sync()
-	base := min(r.h * 0.46, col_w * 0.72, px(360))
-	s := base * mu.art_scale
-	art := Rect{cx - s / 2, r.y + px(64) + (base - s) / 2, s, s}
-	if md.mv != "" {
-		// music video: 16:9, as wide as the column allows
-		vw := min(col_w - px(48), px(640)) * mu.art_scale
-		vh := vw * 9 / 16
-		art = {cx - vw / 2, r.y + px(64) + (base - vh) / 2, vw, vh}
+	avail_h := info_y - px(20) - (L.y + px(56))
+	big_s := min(colw, avail_h, px(440))
+	bw_, bh_ := big_s, big_s
+	if md.mv != "" do bw_, bh_ = min(colw, avail_h * 16 / 9, px(640)), min(colw, avail_h * 16 / 9, px(640)) * 9 / 16
+	bw_, bh_ = bw_ * mu.art_scale, bh_ * mu.art_scale
+	big := Rect{L.x + (L.w - bw_) / 2, L.y + px(56) + (avail_h - bh_) / 2, bw_, bh_}
+	// with the art big, art + text + controls sit together, centered; with a panel open
+	// the controls stay at the bottom to leave room for lyrics / Up Next
+	lift := max(avail_h - bh_, 0) * 0.5 * (1 - k)
+	row_y -= lift
+	ctl_y -= lift
+	bar_y -= lift
+	info_y -= lift
+	small := Rect{L.x + margin, L.y + px(58), px(64) * (16.0 / 9 if md.mv != "" else 1), px(64)}
+	art := lerp_rect(big, small, k)
+	radius := px(12) - px(4) * k
+	for i in 0 ..< 10 { // soft shadow: many faint layers spreading out
+		g := px(f32(i) * 3)
+		rrect({art.x - g, art.y - g + px(14), art.w + 2 * g, art.h + 2 * g}, radius + g, hex(0x000000, 9))
 	}
-	rrect({art.x, art.y + px(10), art.w, art.h}, px(14), hex(0x000000, 90)) // shadow
-	if !draw_video(art) do cover_or_placeholder(art, px(12))
-	if md.mv != "" do text(art.x + px(10), art.y + px(22), "MV", fs(11), with_alpha(FG, 200), true)
+	if !draw_video(art) do cover_or_placeholder(art, radius)
 
-	y := r.y + px(64) + base + px(40)
+	// text and seek bar line up with the art's edges while it is big (like Apple Music)
+	cx0 := big.x + (L.x + margin - big.x) * k
+	cw := big.w + (colw - big.w) * k
+	// title / artist: under the big art, or next to the thumbnail
 	title, sub := song_title()
-	tw := f32(text_width(ellipsize(title, fs(20), col_w - px(60), true), fs(20), true))
-	text(cx - tw / 2, y, ellipsize(title, fs(20), col_w - px(60), true), fs(20), FG, true)
-	sw := f32(text_width(ellipsize(sub, fs(14), col_w - px(60)), fs(14)))
-	text(cx - sw / 2, y + px(26), ellipsize(sub, fs(14), col_w - px(60)), fs(14), DIM)
+	if k < 0.99 {
+		draw_alpha = u32((1 - k) * 255)
+		text(cx0, info_y + px(22), ellipsize(title, fs(22), cw, true), fs(22), FG, true)
+		text(cx0, info_y + px(48), ellipsize(sub, fs(16), cw), fs(16), with_alpha(FG, 165))
+		draw_alpha = 255
+	}
+	if k > 0.01 {
+		draw_alpha = u32(k * 255)
+		tx := small.x + small.w + px(14)
+		text(tx, small.y + px(28), ellipsize(title, fs(17), L.x + L.w - margin - tx, true), fs(17), FG, true)
+		text(tx, small.y + px(50), ellipsize(sub, fs(14), L.x + L.w - margin - tx), fs(14), with_alpha(FG, 165))
+		draw_alpha = 255
+	}
 
+	// seek bar: thin, knob only on hover; elapsed and remaining time under it
 	dur := m.duration if ready else 0
-	bw := min(col_w - px(120), base + px(40))
-	seek_bar({cx - bw / 2, y + px(52), bw, px(5)}, dur, px(12))
+	pos := music_pos()
+	bar := Rect{cx0, bar_y, cw, px(5)}
+	hit := Rect{bar.x, bar.y - px(10), bar.w, bar.h + px(20)}
+	hov := hovering(hit)
+	if hov do bar = {bar.x, bar.y - px(1.5), bar.w, px(8)}
+	rrect(bar, bar.h / 2, hex(0xffffff, 55))
+	if dur > 0 {
+		f := f32(clamp(pos / dur, 0, 1))
+		rrect({bar.x, bar.y, max(bar.w * f, bar.h), bar.h}, bar.h / 2, hex(0xffffff, 225))
+		if hov do rrect({bar.x + bar.w * f - px(7), bar.y + bar.h / 2 - px(7), px(14), px(14)}, px(7), FG)
+		if clicked(hit) do music_seek(f64((app.mx - bar.x) / bar.w) * dur)
+	}
+	text(bar.x, bar_y + px(26), fmt_time(pos), fs(12), with_alpha(FG, 150), true)
+	if dur > 0 {
+		rem := strings.concatenate({"-", fmt_time(dur - pos)}, context.temp_allocator)
+		text(bar.x + bar.w - f32(text_width(rem, fs(12), true)), bar_y + px(26), rem, fs(12), with_alpha(FG, 150), true)
+	}
 
-	cy := y + px(110)
+	// transport: plain big glyphs, a soft circle on hover
 	playing := music_playing() && !mu.paused
-	pb := Rect{cx - px(32), cy - px(32), px(64), px(64)}
-	rrect(pb, px(32), with_alpha(FG, 255 if hovering(pb) else 235))
-	glyph_center({pb.x + (0 if playing else px(3)), pb.y, pb.w, pb.h}, I_PAUSE if playing else I_PLAY, fs(22), hex(0x060913))
-	if clicked(pb) do music_toggle()
-	if icon_button({cx - px(100), cy - px(20), px(40), px(40)}, I_PREV) do music_step(-1)
-	if icon_button({cx + px(60), cy - px(20), px(40), px(40)}, I_NEXT) do music_step(1)
-	if toggle_button({cx - px(160), cy - px(17), px(34), px(34)}, I_SHUFFLE, mu.shuffle) do music_set_shuffle(!mu.shuffle)
-	if toggle_button({cx + px(126), cy - px(17), px(34), px(34)}, I_REPEAT, mu.repeat != .Off, "1" if mu.repeat == .One else "") do mu.repeat = Repeat((int(mu.repeat) + 1) % 3)
+	ccx := L.x + L.w / 2
+	glyph_btn :: proc(c: [2]f32, rad: f32, icon: rune, size: i32) -> bool {
+		r := Rect{c.x - rad, c.y - rad, 2 * rad, 2 * rad}
+		if hovering(r) do rrect(r, rad, hex(0xffffff, app.held ? 40 : 22))
+		glyph_center(r, icon, size, FG)
+		return clicked(r)
+	}
+	gap := min(colw / 3.2, px(110))
+	if glyph_btn({ccx - gap, ctl_y}, px(30), I_PREV, fs(26)) do music_step(-1)
+	if glyph_btn({ccx, ctl_y}, px(40), I_PAUSE if playing else I_PLAY, fs(38)) do music_toggle()
+	if glyph_btn({ccx + gap, ctl_y}, px(30), I_NEXT, fs(26)) do music_step(1)
 
-	// Up Next: beside the player when wide, below the controls when narrow
-	qr := Rect{r.x + col_w + px(10), r.y + px(64), r.w - col_w - px(34), r.h - px(90)}
-	if !wide {
-		top := cy + px(64)
-		qr = {r.x + px(24), top, r.w - px(48), r.y + r.h - top - px(16)}
-		if qr.h < px(120) do return
+	// bottom row: lyrics · shuffle · repeat · up next
+	slots := [4]f32{-1.5, -0.5, 0.5, 1.5}
+	step := min(colw / 4, px(96))
+	pill :: proc(c: [2]f32, icon: rune, on: bool, enabled := true, badge := "") -> bool {
+		r := Rect{c.x - px(22), c.y - px(17), px(44), px(34)}
+		hot(r)
+		if on do rrect(r, px(10), hex(0xffffff, 50))
+		else if enabled && hovering(r) do rrect(r, px(10), hex(0xffffff, 20))
+		glyph_center(r, icon, fs(16), FG if on else with_alpha(FG, 150 if enabled else 60))
+		if badge != "" do text(r.x + r.w - px(12), r.y + px(13), badge, fs(9), FG, true)
+		return enabled && clicked(r)
 	}
-	if len(md.lyrics) > 0 {
-		lb := Rect{qr.x + qr.w - px(76), qr.y - px(18), px(34), px(30)}
-		qb := Rect{qr.x + qr.w - px(38), qr.y - px(18), px(34), px(30)}
-		if icon_button(lb, I_LYRICS, md.panel == .Lyrics) do md.panel = .Lyrics
-		if icon_button(qb, I_QUEUE, md.panel == .Queue) do md.panel = .Queue
-		if md.panel == .Lyrics {
-			text(qr.x + px(8), qr.y + px(4), "歌詞", fs(16), FG, true)
-			draw_lyrics({qr.x, qr.y + px(20), qr.w, qr.h - px(20)})
-			return
-		}
+	lyr_on := (wide && md.panel == .Lyrics && has_lyrics) || (!wide && mu.panel_open && md.panel == .Lyrics)
+	que_on := (wide && (md.panel == .Queue || !has_lyrics)) || (!wide && mu.panel_open && md.panel == .Queue)
+	if pill({ccx + slots[0] * step, row_y}, I_LYRICS, lyr_on, has_lyrics) {
+		if !wide && lyr_on do mu.panel_open = false
+		else {md.panel = .Lyrics; mu.panel_open = true}
 	}
-	text(qr.x + px(8), qr.y + px(4), "次に再生", fs(16), FG, true)
-	if mu.scan != nil do text(qr.x + px(100), qr.y + px(4), "曲を集めています…", fs(12), DIM)
-	rows := Rect{qr.x, qr.y + px(20), qr.w, qr.h - px(20)}
-	row_h := px(48)
+	if pill({ccx + slots[1] * step, row_y}, I_SHUFFLE, mu.shuffle) do music_set_shuffle(!mu.shuffle)
+	if pill({ccx + slots[2] * step, row_y}, I_REPEAT, mu.repeat != .Off, true, "1" if mu.repeat == .One else "") do mu.repeat = Repeat((int(mu.repeat) + 1) % 3)
+	if pill({ccx + slots[3] * step, row_y}, I_QUEUE, que_on) {
+		if !wide && que_on do mu.panel_open = false
+		else {md.panel = .Queue; mu.panel_open = true}
+	}
+
+	// lyrics / Up Next
+	pr: Rect
+	if wide {
+		pr = {L.x + L.w + px(10), r.y + px(56), r.w - L.w - px(46), r.h - px(80)}
+	} else {
+		if k < 0.05 do return
+		top := small.y + small.h + px(20)
+		pr = {L.x + margin - px(12), top, colw + px(24), bar_y - px(26) - top}
+		draw_alpha = u32(k * 255)
+	}
+	defer draw_alpha = 255
+	if md.panel == .Lyrics && has_lyrics {
+		draw_lyrics(pr)
+	} else {
+		draw_queue(pr)
+	}
+}
+
+draw_queue :: proc(qr: Rect) {
+	text(qr.x + px(12), qr.y + px(18), "次に再生", fs(17), FG, true)
+	if mu.scan != nil do text(qr.x + px(110), qr.y + px(18), "曲を集めています…", fs(12), with_alpha(FG, 140))
+	rows := Rect{qr.x, qr.y + px(30), qr.w, qr.h - px(30)}
+	row_h := px(54)
 	n := len(mu.order)
 	if app.wheel != 0 && hovering(rows) do mu.q_scroll = clamp(mu.q_scroll - app.wheel * px(80), 0, max(0, f32(n - mu.pos) * row_h - rows.h))
 	set_clip(rows)
+	defer set_clip({0, 0, f32(cv.w), f32(cv.h)})
 	ry := rows.y - mu.q_scroll
 	for k in mu.pos ..< n {
 		if ry > rows.y + rows.h do break
 		if ry + row_h >= rows.y {
 			rr := Rect{rows.x, ry, rows.w, row_h - px(4)}
 			cur := k == mu.pos
-			if cur do rrect(rr, px(10), hex(0xffffff, 26))
-			else if hovering(rr) do rrect(rr, px(10), HOVER)
+			if cur do rrect(rr, px(10), hex(0xffffff, 34))
+			else if hovering(rr) do rrect(rr, px(10), hex(0xffffff, 16))
 			path := mu.list[mu.order[k]]
-			if cur do eq_badge(rr.x + px(12), rr.y + px(12), px(20))
-			else do text(rr.x + px(16), baseline(rr, fs(12)), fmt.tprintf("%d", k - mu.pos), fs(12), DIM)
-			text(rr.x + px(46), rr.y + px(20), ellipsize(filepath.stem(path), fs(14), rr.w - px(60), cur), fs(14), FG, cur)
-			text(rr.x + px(46), rr.y + px(38), ellipsize(filepath.base(filepath.dir(path)), fs(11), rr.w - px(60)), fs(11), DIM)
+			// album art from the thumbnail cache when there is one
+			ar := Rect{rr.x + px(10), rr.y + px(5), rr.h - px(10), rr.h - px(10)}
+			if th := thumb_get(path, 0, .Audio); th != nil {
+				blit_scaled(ar, th.px, th.w, th.h)
+				rrect(ar, px(5), hex(0xffffff, 30), px(1))
+			} else {
+				rrect(ar, px(6), hex(0xffffff, 28))
+				glyph_center(ar, I_MUSIC, fs(13), with_alpha(FG, 160))
+			}
+			if cur do eq_badge(ar.x + ar.w - px(14), ar.y + ar.h - px(14), px(14))
+			tx := ar.x + ar.w + px(12)
+			text(tx, rr.y + px(22), ellipsize(filepath.stem(path), fs(14), rr.x + rr.w - tx - px(10), cur), fs(14), FG, cur)
+			text(tx, rr.y + px(40), ellipsize(filepath.base(filepath.dir(path)), fs(12), rr.x + rr.w - tx - px(10)), fs(12), with_alpha(FG, 140))
 			if clicked(rr) && !cur {
 				mu.pos = k
 				music_start(0)

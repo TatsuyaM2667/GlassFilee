@@ -29,6 +29,14 @@ thumbs: map[string]Thumb
 thumb_jobs: int
 frame_no: u64
 
+// Where "this file has no thumbnail" is remembered (freedesktop: thumbnails/fail/<app>/).
+@(private = "file")
+fail_path :: proc(cp: string) -> string {
+	dir := filepath.dir(filepath.dir(cp))
+	p, _ := filepath.join({dir, "fail", "ame-filemanager", filepath.base(cp)}, context.temp_allocator)
+	return p
+}
+
 @(private = "file")
 cache_path :: proc(path: string) -> string {
 	ctx: md5.Context
@@ -75,7 +83,7 @@ evict :: proc() {
 }
 
 // Returns the thumbnail if ready (starts generating it otherwise).
-thumb_get :: proc(path: string, mtime: i64, video: bool) -> ^Thumb {
+thumb_get :: proc(path: string, mtime: i64, kind: Kind) -> ^Thumb {
 	if t, ok := &thumbs[path]; ok {
 		t.used = frame_no
 		return t if t.state == .Ready else nil
@@ -95,11 +103,17 @@ thumb_get :: proc(path: string, mtime: i64, video: bool) -> ^Thumb {
 			return &thumbs[path]
 		}
 	}
+	// tried before and there was nothing (e.g. an MP3 without album art)
+	if info, err := os.stat(fail_path(cp), context.temp_allocator); err == nil && info.modification_time._nsec / 1_000_000_000 >= mtime {
+		thumbs[strings.clone(path)] = Thumb{state = .Failed, used = frame_no}
+		return nil
+	}
 	if !have_tool("ffmpeg") || thumb_jobs >= MAX_THUMB_JOBS do return nil
 	_ = os.make_directory_all(filepath.dir(cp))
 	tmp := strings.concatenate({cp, ".tmp.png"})
-	vf := "thumbnail,scale=128:128:force_original_aspect_ratio=decrease" if video else "scale=128:128:force_original_aspect_ratio=decrease"
-	pid := spawn({"ffmpeg", "-nostdin", "-v", "error", "-y", "-i", path, "-frames:v", "1", "-vf", vf, "-pix_fmt", "rgba", tmp})
+	// video: a representative frame; audio: the embedded album art (its "video" stream)
+	vf := "thumbnail,scale=128:128:force_original_aspect_ratio=decrease" if kind == .Video else "scale=128:128:force_original_aspect_ratio=decrease"
+	pid := spawn({"ffmpeg", "-nostdin", "-v", "error", "-y", "-i", path, "-an", "-frames:v", "1", "-vf", vf, "-pix_fmt", "rgba", tmp})
 	if pid == 0 {
 		delete(tmp)
 		return nil
@@ -121,16 +135,25 @@ thumb_done :: proc(j: Job, ok: bool) {
 	} else {
 		os.remove(j.label)
 		if t, found := &thumbs[j.src]; found do t.state = .Failed
+		fp := fail_path(j.dest)
+		_ = os.make_directory_all(filepath.dir(fp))
+		_ = os.write_entire_file_from_string(fp, "") // don't retry until the file changes
 	}
 }
 
 // Draws a thumbnail fitted into an s×s icon box.
-draw_thumb :: proc(x, y, s: f32, t: ^Thumb, video: bool) {
+draw_thumb :: proc(x, y, s: f32, t: ^Thumb, kind: Kind) {
 	sc := min(s / f32(t.w), s / f32(t.h))
 	w, h := f32(t.w) * sc, f32(t.h) * sc
 	r := Rect{x + (s - w) / 2, y + (s - h) / 2, w, h}
 	rrect({r.x, r.y + px(2), r.w, r.h}, px(4), hex(0x000000, 60))
 	blit_scaled(r, t.px, t.w, t.h)
 	rrect(r, px(3), hex(0xffffff, 40), px(1))
-	if video && s >= 40 do glyph_center({r.x + px(4), r.y + r.h - px(22), px(18), px(18)}, 0xf04b, fs(11), hex(0xffffff, 230))
+	if kind == .Video && s >= 40 do glyph_center({r.x + px(4), r.y + r.h - px(22), px(18), px(18)}, 0xf04b, fs(11), hex(0xffffff, 230))
+	if kind == .Audio && s >= 40 {
+		// album art: a little note badge so it still reads as a song
+		b := Rect{r.x + r.w - px(18), r.y + r.h - px(18), px(16), px(16)}
+		rrect(b, px(8), hex(0x10141f, 220))
+		glyph_center(b, I_MUSIC, fs(9), FG)
+	}
 }
