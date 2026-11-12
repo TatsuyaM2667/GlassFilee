@@ -668,6 +668,9 @@ on_offer :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_
 		switch string(a[0].s) {
 		case "x-special/gnome-copied-files": w.offer_mimes[target] |= 1
 		case "text/uri-list":                w.offer_mimes[target] |= 2
+		case "text/plain;charset=utf-8":     w.offer_mimes[target] |= 4
+		case "UTF8_STRING":                  w.offer_mimes[target] |= 8
+		case "text/plain":                   w.offer_mimes[target] |= 16
 		}
 	}
 	if op == 2 && target == w.dnd_offer do w.dnd_action = a[0].u // action chosen by the compositor (modifiers)
@@ -772,25 +775,44 @@ plat_set_clipboard_files :: proc(paths: []string, cut: bool) {
 	w.source = src
 }
 
-// True while the clipboard holds what we put there (use the in-app copy then).
-plat_clipboard_is_ours :: proc() -> bool {return w.source != nil}
-
-// Reads files from another app's clipboard. ok=false if it holds no files.
-plat_get_clipboard_files :: proc(allocator := context.temp_allocator) -> (paths: [dynamic]string, cut, ok: bool) {
-	o := w.sel_offer
-	if o == nil || w.source != nil do return
-	m := w.offer_mimes[o]
-	if m == 0 do return
-	return receive_paths(o, allocator)
+// Puts plain text on the system clipboard (paths, entry selections).
+plat_set_clipboard_text :: proc(text: string) {
+	if w.ddm == nil || w.ddev == nil do return
+	for s in w.source_payload do delete(s)
+	w.source_payload = {strings.clone(text), strings.clone(text), strings.clone(text)}
+	src := wl_proxy_marshal_flags(w.ddm, 0, &wl_data_source_interface, ver(w.ddm), 0, rawptr(nil))
+	listen(src, on_source)
+	for m in ([]cstring{"text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "TEXT", "STRING"}) {
+		wl_proxy_marshal_flags(src, 0, nil, ver(src), 0, m)
+	}
+	wl_proxy_marshal_flags(w.ddev, 1, nil, ver(w.ddev), 0, src, w.serial)
+	w.source = src
 }
 
-// Reads file paths offered by another app (gnome-copied-files or uri-list).
-@(private = "file")
-receive_paths :: proc(o: Proxy, allocator: runtime.Allocator) -> (paths: [dynamic]string, cut, ok: bool) {
+// Text from the system clipboard ("" if none). Copied files come back as their paths.
+plat_get_clipboard_text :: proc(allocator := context.temp_allocator) -> string {
+	if w.source != nil do return strings.clone(w.source_payload[2], allocator) // ours: no round trip
+	o := w.sel_offer
+	if o == nil do return ""
 	m := w.offer_mimes[o]
-	mime: cstring = "x-special/gnome-copied-files" if m & 1 != 0 else "text/uri-list"
+	mime: cstring
+	switch {
+	case m & 4 != 0:  mime = "text/plain;charset=utf-8"
+	case m & 8 != 0:  mime = "UTF8_STRING"
+	case m & 16 != 0: mime = "text/plain"
+	case m & 2 != 0:  // only a file list: paste the paths
+		paths, _, ok := receive_paths(o, allocator)
+		return strings.join(paths[:], "\n", allocator) if ok else ""
+	case: return ""
+	}
+	data := receive_mime(o, mime)
+	return strings.clone(strings.trim_right(string(data), "\x00"), allocator)
+}
+
+@(private = "file")
+receive_mime :: proc(o: Proxy, mime: cstring) -> []u8 {
 	fds: [2]posix.FD
-	if posix.pipe(&fds) != .OK do return
+	if posix.pipe(&fds) != .OK do return nil
 	wl_proxy_marshal_flags(o, 1, nil, ver(o), 0, mime, i32(fds[1]))
 	posix.close(fds[1])
 	wl_display_flush(w.display)
@@ -804,8 +826,29 @@ receive_paths :: proc(o: Proxy, allocator: runtime.Allocator) -> (paths: [dynami
 		append(&data, ..buf[:n])
 	}
 	posix.close(fds[0])
+	return data[:]
+}
+
+// True while the clipboard holds what we put there (use the in-app copy then).
+plat_clipboard_is_ours :: proc() -> bool {return w.source != nil}
+
+// Reads files from another app's clipboard. ok=false if it holds no files.
+plat_get_clipboard_files :: proc(allocator := context.temp_allocator) -> (paths: [dynamic]string, cut, ok: bool) {
+	o := w.sel_offer
+	if o == nil || w.source != nil do return
+	m := w.offer_mimes[o]
+	if m & 3 == 0 do return // text only, no files
+	return receive_paths(o, allocator)
+}
+
+// Reads file paths offered by another app (gnome-copied-files or uri-list).
+@(private = "file")
+receive_paths :: proc(o: Proxy, allocator: runtime.Allocator) -> (paths: [dynamic]string, cut, ok: bool) {
+	m := w.offer_mimes[o]
+	mime: cstring = "x-special/gnome-copied-files" if m & 1 != 0 else "text/uri-list"
+	data := receive_mime(o, mime)
 	paths = make([dynamic]string, allocator)
-	for line in strings.split_lines(string(data[:]), context.temp_allocator) {
+	for line in strings.split_lines(string(data), context.temp_allocator) {
 		l := strings.trim_space(line)
 		if l == "cut" do cut = true
 		if !strings.has_prefix(l, "file://") do continue

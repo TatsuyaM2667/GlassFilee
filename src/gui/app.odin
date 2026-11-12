@@ -76,7 +76,7 @@ Act :: enum {
 	Terminal, Hidden, Reload, Empty_Trash, Sort, Dialog_Ok, Dialog_Cancel, Close, Extract, Compress,
 	New_Tab, Close_Tab, Switch_Tab, Next_Tab, Convert, Preview, Split, Undo,
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
-	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir,
+	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir, Copy_Path,
 }
 
 Pending :: struct {
@@ -810,6 +810,7 @@ run_pending :: proc() {
 		case .Unrule: remove_rule(app.cwd)
 		case .Play_All: music_play_folder(0)
 		case .Play_Entry: if p.i >= 0 && p.i < len(app.entries) do music_play_entry(p.i)
+		case .Copy_Path:  copy_path()
 		case .Play_Dir:
 			sel := selection()
 			if len(sel) == 1 && app.entries[sel[0]].is_dir do music_play_dir(full_path(app.entries[sel[0]].name))
@@ -889,6 +890,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		sep()
 		add("切り取り", .Cut, "Ctrl+X")
 		add("コピー", .Copy, "Ctrl+C")
+		add("パスをコピー", .Copy_Path, "Shift+Ctrl+C")
 		add("名前を変更…" if n == 1 else "まとめて名前を変更…", .Rename, "F2")
 		if n == 1 && app.entries[vi].is_dir do add("ブックマークに追加", .Bookmark, "Ctrl+D")
 		add("プロパティ", .Props, "Ctrl+I")
@@ -909,6 +911,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("すべて選択", .Select_All, "Ctrl+A")
 		sep()
 		add("端末で開く", .Terminal)
+		add("パスをコピー", .Copy_Path, "Shift+Ctrl+C")
 		add("隠しファイルを隠す" if app.show_hidden else "隠しファイルを表示", .Hidden, "Ctrl+H")
 		add("ブックマークに追加", .Bookmark, "Ctrl+D")
 		if is_music_folder() do add("すべて再生", .Play_All)
@@ -1006,14 +1009,17 @@ edit_key :: proc(e: ^Edit, key: u32, ctrl, shift: bool) -> bool {
 		if !ctrl do return false
 		if e.cur != e.anchor {
 			s := string(e.buf[min(e.cur, e.anchor):max(e.cur, e.anchor)])
-			// shortcut: app-internal text clipboard (no wl_data_device yet)
+			plat_set_clipboard_text(s) // system clipboard: paste anywhere
 			delete(app.text_clip)
-			app.text_clip = strings.clone(s)
+			app.text_clip = strings.clone(s) // fallback without a data device
 			if key == K_X do edit_del_sel(e)
 		}
 	case K_V:
 		if !ctrl do return false
-		if app.text_clip != "" do edit_insert(e, app.text_clip)
+		t := plat_get_clipboard_text()
+		if t == "" do t = app.text_clip
+		if i := strings.index_any(t, "\r\n"); i >= 0 do t = t[:i] // entries are one line
+		if t != "" do edit_insert(e, t)
 	case:
 		return false
 	}
@@ -1878,7 +1884,8 @@ on_key :: proc(ev: Ev) {
 		e := app.entries[vi]
 		if e.is_dir && (e.name in app.expanded) != (key == K_RIGHT) do push(.Tree_Toggle, vi)
 	case ctrl && key == K_A: push(.Select_All)
-	case ctrl && key == K_C: push(.Copy)
+	case ctrl && shift && key == K_C: push(.Copy_Path)
+	case ctrl && key == K_C: push(.Copy if len(selection()) > 0 else .Copy_Path) // nothing selected: the folder's path
 	case ctrl && key == K_X: push(.Cut)
 	case ctrl && key == K_V: push(.Paste)
 	case ctrl && shift && key == K_N: push(.Mkdir)
@@ -2404,4 +2411,17 @@ toggle_split :: proc() {
 	app.other = {}
 	app.is_right = false
 	app.split = false
+}
+
+// Copies the selected items' paths (or the current folder's) as text.
+copy_path :: proc() {
+	paths := make([dynamic]string, context.temp_allocator)
+	for vi in selection() do append(&paths, full_path(app.entries[vi].name))
+	if len(paths) == 0 {
+		if is_tag_view() do return
+		append(&paths, app.cwd)
+	}
+	plat_set_clipboard_text(strings.join(paths[:], "\n", context.temp_allocator))
+	if len(paths) == 1 do toastf("パスをコピーしました: %s", paths[0])
+	else do toastf("%d 個のパスをコピーしました", len(paths))
 }
