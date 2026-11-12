@@ -229,7 +229,7 @@ draw_preview :: proc(W, H: f32) {
 	case:
 		s := min(area.w, area.h) * 0.5
 		ix, iy := area.x + (area.w - s) / 2, area.y + (area.h - s) / 2
-		if e.is_dir do folder_icon(ix, iy, s)
+		if e.is_dir do folder_icon(ix, iy, s, 0, tag_of(e.name))
 		else do file_icon(ix, iy, s, e.kind)
 	}
 	// caption

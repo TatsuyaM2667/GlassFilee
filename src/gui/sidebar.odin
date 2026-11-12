@@ -330,11 +330,11 @@ draw_sidebar :: proc(w, H: f32) {
 	any_used := false
 	for u in used[1:] do any_used ||= u
 	if any_used {
-		side_section(&y, w, "タグ")
+		side_section(&y, w, "色")
 		for c in u8(1) ..= 7 {
 			if !used[c] do continue
 			r := side_row(&y, w, 0, TAG_NAMES[c], tag_filter == c)
-			tag_dot(r.x + px(20), r.y + r.h / 2, px(7), c)
+			folder_icon(r.x + px(10), r.y + px(8), px(20), 0, c)
 			if clicked(r) {
 				tag_filter = 0 if tag_filter == c else c
 				refilter()

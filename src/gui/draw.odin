@@ -161,14 +161,20 @@ encode_rune :: proc(buf: []u8, r: rune) -> int {
 // ---------------------------------------------------------------------------
 // Adwaita-style file icons, drawn procedurally (no icon theme / SVG loader needed)
 
-folder_icon :: proc(x, y, s: f32, emblem: rune = 0) {
-	rrect({x + 0.06 * s, y + 0.12 * s, 0.38 * s, 0.14 * s}, 0.05 * s, hex(0x1c71d8))
-	rrect({x + 0.06 * s, y + 0.17 * s, 0.88 * s, 0.68 * s}, 0.07 * s, hex(0x1c71d8))
+// tint: 0 = Adwaita blue, 1..7 = TAG_COLORS (the folder itself takes the color)
+folder_icon :: proc(x, y, s: f32, emblem: rune = 0, tint: u8 = 0) {
+	base: u32 = 0x62a0ea if tint == 0 else TAG_COLORS[tint]
+	shade :: proc(c: u32, f: f32, a: u8 = 255) -> Color {
+		return {u8(f32((c >> 16) & 255) * f), u8(f32((c >> 8) & 255) * f), u8(f32(c & 255) * f), a}
+	}
+	back, mid := shade(base, 0.62), shade(base, 0.8)
+	rrect({x + 0.06 * s, y + 0.12 * s, 0.38 * s, 0.14 * s}, 0.05 * s, back)
+	rrect({x + 0.06 * s, y + 0.17 * s, 0.88 * s, 0.68 * s}, 0.07 * s, back)
 	rrect({x + 0.12 * s, y + 0.24 * s, 0.76 * s, 0.30 * s}, 0.03 * s, hex(0xdeddda))
-	rrect({x + 0.06 * s, y + 0.31 * s, 0.88 * s, 0.56 * s}, 0.07 * s, hex(0x3584e4))
-	rrect({x + 0.06 * s, y + 0.31 * s, 0.88 * s, 0.50 * s}, 0.07 * s, hex(0x62a0ea))
+	rrect({x + 0.06 * s, y + 0.31 * s, 0.88 * s, 0.56 * s}, 0.07 * s, mid)
+	rrect({x + 0.06 * s, y + 0.31 * s, 0.88 * s, 0.50 * s}, 0.07 * s, hex(base))
 	if emblem != 0 && s >= 32 {
-		glyph_center({x + 0.06 * s, y + 0.34 * s, 0.88 * s, 0.48 * s}, emblem, i32(0.24 * s), hex(0x1a5fb4, 220))
+		glyph_center({x + 0.06 * s, y + 0.34 * s, 0.88 * s, 0.48 * s}, emblem, i32(0.24 * s), shade(base, 0.45, 220))
 	}
 }
 

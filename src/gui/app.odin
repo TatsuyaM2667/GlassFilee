@@ -846,7 +846,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("名前を変更…" if n == 1 else "まとめて名前を変更…", .Rename, "F2")
 		if n == 1 && app.entries[vi].is_dir do add("ブックマークに追加", .Bookmark, "Ctrl+D")
 		add("プロパティ", .Props, "Ctrl+I")
-		append(&app.menu_items, Menu_Item{label = "タグ", colors = true, ok = true})
+		append(&app.menu_items, Menu_Item{label = "色", colors = true, ok = true})
 		sep()
 		add("ゴミ箱へ移動", .Trash, "Delete")
 		add("完全に削除…", .Delete, "Shift+Delete")
@@ -1424,10 +1424,10 @@ draw_body :: proc() {
 			ix, iy := r.x + (r.w - is) / 2, r.y + px(8)
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video) do th = thumb_get(full_path(e.name), e.mtime, e.kind == .Video)
-			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)))
+			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)), tag_of(e.name))
 			else if th != nil do draw_thumb(ix, iy, is, th, e.kind == .Video)
 			else do file_icon(ix, iy, is, e.kind)
-			tag_dot(ix + px(6), iy + px(10), px(6), tag_of(e.name))
+			if !e.is_dir do tag_dot(ix + px(6), iy + px(10), px(6), tag_of(e.name)) // folders show it as their own color
 			git_dot(ix + is - px(4), iy + is - px(6), px(6), e.name)
 			if len(jobs) > 0 {if f := converting(e.name); f >= 0 do progress_ring({ix, iy, is, is}, f)}
 			if e.is_link do glyph_center({ix + is - px(20), iy + is - px(20), px(20), px(20)}, I_LINK, fs(12), FG)
@@ -1441,10 +1441,10 @@ draw_body :: proc() {
 			ix, iy := r.x + px(16), r.y + (r.h - is) / 2
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video) do th = thumb_get(full_path(e.name), e.mtime, e.kind == .Video)
-			if e.is_dir do folder_icon(ix, iy, is)
+			if e.is_dir do folder_icon(ix, iy, is, 0, tag_of(e.name))
 			else if th != nil do draw_thumb(ix, iy, is, th, false)
 			else do file_icon(ix, iy, is, e.kind)
-			tag_dot(ix + px(2), iy + px(4), px(5), tag_of(e.name))
+			if !e.is_dir do tag_dot(ix + px(2), iy + px(4), px(5), tag_of(e.name))
 			git_dot(ix + is, iy + is - px(2), px(5), e.name)
 			if len(jobs) > 0 {if f := converting(e.name); f >= 0 do progress_ring({ix, iy, is, is}, f)}
 			size := fs(14)
@@ -1984,6 +1984,7 @@ main :: proc() {
 	watch_init()
 	load_rules()
 	refresh_devices()
+
 
 
 

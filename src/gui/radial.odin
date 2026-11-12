@@ -194,7 +194,7 @@ draw_menu :: proc() {
 		it := app.menu_items[idx[hover]]
 		title, key = it.label, it.key
 	}
-	if color_hover >= 0 do title = "タグなし" if color_hover == 0 else strings.concatenate({"タグ: ", TAG_NAMES[color_hover]}, context.temp_allocator)
+	if color_hover >= 0 do title = "色を戻す" if color_hover == 0 else strings.concatenate({"色: ", TAG_NAMES[color_hover]}, context.temp_allocator)
 	tsize := fs(12)
 	t := ellipsize(title, tsize, (r0 - px(6)) * 1.8, true)
 	tw := f32(text_width(t, tsize, true))
