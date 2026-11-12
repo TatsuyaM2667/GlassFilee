@@ -37,7 +37,7 @@ act_icon :: proc(a: Act) -> rune {
 	case .Select_All:      return 0xf046
 	case .Terminal:        return 0xf120
 	case .Hidden:          return 0xf070
-	case .Play_All:        return I_PLAY
+	case .Play_All, .Play_Dir: return I_PLAY
 	case .Rule:            return 0xf0e7
 	case .Unrule:          return 0xf05e
 	case .View_Grid:       return I_GRID

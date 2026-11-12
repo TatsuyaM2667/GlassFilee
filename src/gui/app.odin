@@ -76,7 +76,7 @@ Act :: enum {
 	Terminal, Hidden, Reload, Empty_Trash, Sort, Dialog_Ok, Dialog_Cancel, Close, Extract, Compress,
 	New_Tab, Close_Tab, Switch_Tab, Next_Tab, Convert, Preview, Split, Undo,
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
-	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry,
+	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir,
 }
 
 Pending :: struct {
@@ -807,6 +807,9 @@ run_pending :: proc() {
 		case .Unrule: remove_rule(app.cwd)
 		case .Play_All: music_play_folder(0)
 		case .Play_Entry: if p.i >= 0 && p.i < len(app.entries) do music_play_entry(p.i)
+		case .Play_Dir:
+			sel := selection()
+			if len(sel) == 1 && app.entries[sel[0]].is_dir do music_play_dir(full_path(app.entries[sel[0]].name))
 		case .Tag_Pick: if len(selection()) > 0 do app.dialog = .Tag_Pick
 		case .Tag_New:  tag_begin_edit(-1)
 		case .Tag_Rename:
@@ -873,6 +876,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 	} else if vi >= 0 {
 		add("開く", .Open, "Enter")
 		if n == 1 && app.entries[vi].is_dir do add("新しいタブで開く", .New_Tab, "中クリック")
+		if n == 1 && app.entries[vi].is_dir do add("音楽を再生", .Play_Dir)
 		if n == 1 {
 			if _, _, ok := archive_kind(app.entries[vi].name); ok do add("ここに展開", .Extract)
 		}
@@ -2074,6 +2078,7 @@ main :: proc() {
 	watch_init()
 	load_rules()
 	refresh_devices()
+
 
 
 

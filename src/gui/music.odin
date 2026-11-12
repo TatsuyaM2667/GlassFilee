@@ -186,11 +186,31 @@ scan_free :: proc() {
 // Called from the main loop: swaps in the full queue when the scan finishes.
 music_poll :: proc() -> bool {
 	s := mu.scan
-	if s == nil || !sync.atomic_load(&s.done) do return false
-	cur := strings.clone(music_current(), context.temp_allocator)
-	if len(s.paths) > 0 do set_queue(s.paths[:], cur)
+	if s == nil || !sync.atomic_load(&s.done) do return video_fresh()
+	if md.pending_dir {
+		// folder play: the queue is ready, start from its first song
+		md.pending_dir = false
+		if len(s.paths) == 0 {
+			toastf("音楽ファイルが見つかりません")
+		} else {
+			set_queue(s.paths[:], s.paths[0])
+			music_start(0)
+		}
+	} else {
+		cur := strings.clone(music_current(), context.temp_allocator)
+		if len(s.paths) > 0 do set_queue(s.paths[:], cur)
+	}
 	scan_free()
 	return true
+}
+
+// Collects every song under root on a worker thread (music_poll picks it up).
+music_scan :: proc(root: string) {
+	scan_free()
+	s := new(Scan)
+	s.root = strings.clone(root)
+	s.th = thread.create_and_start_with_poly_data(s, scan_worker)
+	mu.scan = s
 }
 
 // Plays entry vi now; the queue grows to the whole folder tree in the background.
@@ -206,12 +226,8 @@ music_play_entry :: proc(vi: int) {
 	}
 	set_queue({path}, path)
 	music_start(0)
-	scan_free()
-	root := app.cwd if !is_tag_view() else filepath.dir(path)
-	s := new(Scan)
-	s.root = strings.clone(root)
-	s.th = thread.create_and_start_with_poly_data(s, scan_worker)
-	mu.scan = s
+	md.pending_dir = false
+	music_scan(app.cwd if !is_tag_view() else filepath.dir(path))
 }
 
 // "すべて再生": the first song of the folder (tree).
@@ -232,6 +248,7 @@ music_start :: proc(offset: f64) {
 	mu.paused = false
 	mu.start_ms = ticks_ms() - i64(offset * 1000)
 	mu.paused_at = offset
+	media_track_started(path, offset)
 	if mu.meta == nil || mu.meta.path != path {
 		meta_free()
 		m := new(Meta)
@@ -243,6 +260,7 @@ music_start :: proc(offset: f64) {
 
 // Stops the player process (a stopped process must be continued to receive the signal).
 music_kill :: proc() {
+	video_stop()
 	if mu.pid == 0 do return
 	pid := mu.pid
 	mu.pid = 0 // reap_jobs must not treat this exit as "song finished"
@@ -278,6 +296,7 @@ music_toggle :: proc() {
 		posix.kill(mu.pid, .SIGSTOP)
 		mu.paused = true
 	}
+	video_pause(mu.paused)
 }
 
 // d = +1 next / -1 previous; auto = the song ended by itself.
@@ -498,6 +517,7 @@ draw_player :: proc(r: Rect) {
 		cover_or_placeholder(cr, px(8))
 		title, sub = song_title()
 		sub = strings.concatenate({sub, fmt.tprintf("  ·  %d / %d", mu.pos + 1, len(mu.order))}, context.temp_allocator)
+		if k := current_lyric(music_pos()); k >= 0 && md.lyrics[k].text != "" do sub = strings.concatenate({"♪ ", md.lyrics[k].text}, context.temp_allocator)
 		if mu.scan != nil do sub = strings.concatenate({sub, " …"}, context.temp_allocator)
 	} else {
 		rrect(cr, px(8), mix(with_alpha(ACCENT, 210), hex(0xcba6f7), 0.5))
@@ -617,11 +637,19 @@ draw_now_playing :: proc(area: Rect) {
 		mu.art_scale += d * (1 - math.exp(-app.dt * 9))
 		app.animating = true
 	} else do mu.art_scale = target
+	video_sync()
 	base := min(r.h * 0.46, col_w * 0.72, px(360))
 	s := base * mu.art_scale
 	art := Rect{cx - s / 2, r.y + px(64) + (base - s) / 2, s, s}
+	if md.mv != "" {
+		// music video: 16:9, as wide as the column allows
+		vw := min(col_w - px(48), px(640)) * mu.art_scale
+		vh := vw * 9 / 16
+		art = {cx - vw / 2, r.y + px(64) + (base - vh) / 2, vw, vh}
+	}
 	rrect({art.x, art.y + px(10), art.w, art.h}, px(14), hex(0x000000, 90)) // shadow
-	cover_or_placeholder(art, px(12))
+	if !draw_video(art) do cover_or_placeholder(art, px(12))
+	if md.mv != "" do text(art.x + px(10), art.y + px(22), "MV", fs(11), with_alpha(FG, 200), true)
 
 	y := r.y + px(64) + base + px(40)
 	title, sub := song_title()
@@ -651,6 +679,17 @@ draw_now_playing :: proc(area: Rect) {
 		top := cy + px(64)
 		qr = {r.x + px(24), top, r.w - px(48), r.y + r.h - top - px(16)}
 		if qr.h < px(120) do return
+	}
+	if len(md.lyrics) > 0 {
+		lb := Rect{qr.x + qr.w - px(76), qr.y - px(18), px(34), px(30)}
+		qb := Rect{qr.x + qr.w - px(38), qr.y - px(18), px(34), px(30)}
+		if icon_button(lb, I_LYRICS, md.panel == .Lyrics) do md.panel = .Lyrics
+		if icon_button(qb, I_QUEUE, md.panel == .Queue) do md.panel = .Queue
+		if md.panel == .Lyrics {
+			text(qr.x + px(8), qr.y + px(4), "歌詞", fs(16), FG, true)
+			draw_lyrics({qr.x, qr.y + px(20), qr.w, qr.h - px(20)})
+			return
+		}
 	}
 	text(qr.x + px(8), qr.y + px(4), "次に再生", fs(16), FG, true)
 	if mu.scan != nil do text(qr.x + px(100), qr.y + px(4), "曲を集めています…", fs(12), DIM)

@@ -59,3 +59,20 @@ tags_follow_renames :: proc(t: ^testing.T) {
 posix_setenv_config :: proc(base: string) {
 	posix.setenv("XDG_CONFIG_HOME", strings.clone_to_cstring(base, context.temp_allocator), true)
 }
+
+@(test)
+lrc_parse :: proc(t: ^testing.T) {
+	src := "[ar:Ame Band]\n[ti:Rain]\n[offset:+500]\n[00:01.00]first\n[00:10.50][00:30:00]chorus\n[00:05.25]second\nno stamp\n[00:20.00]\n"
+	lines := make([dynamic]Lyric_Line, context.temp_allocator)
+	parse_lrc(src, &lines)
+	testing.expect_value(t, len(lines), 5)
+	// sorted by time, offset (+0.5 s) applied, repeated stamps expanded
+	testing.expect_value(t, lines[0].text, "first")
+	testing.expect_value(t, lines[0].t, 0.5)
+	testing.expect_value(t, lines[1].text, "second")
+	testing.expect_value(t, lines[2].text, "chorus")
+	testing.expect_value(t, lines[2].t, 10.0)
+	testing.expect_value(t, lines[3].text, "") // instrumental gap
+	testing.expect_value(t, lines[4].text, "chorus")
+	testing.expect_value(t, lines[4].t, 29.5) // [00:30:00] variant
+}
