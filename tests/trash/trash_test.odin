@@ -59,6 +59,9 @@ copy_tree_progress_and_cancel :: proc(t: ^testing.T) {
 	base := os.get_env("GF_TEST_DIR", context.temp_allocator)
 	if base == "" do return
 	j :: proc(a: ..string) -> string {return strings.concatenate(a, context.temp_allocator)}
+	// never the real trash: this test trashes a folder at the end
+	_ = os.make_directory_all(j(base, "/ctdata"))
+	posix.setenv("XDG_DATA_HOME", strings.clone_to_cstring(j(base, "/ctdata"), context.temp_allocator), true)
 	_ = os.make_directory_all(j(base, "/ct/src/sub"))
 	_ = os.write_entire_file_from_string(j(base, "/ct/src/a.txt"), "hello")
 	_ = os.write_entire_file_from_string(j(base, "/ct/src/sub/b.txt"), "world!")
