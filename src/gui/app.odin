@@ -2093,6 +2093,7 @@ main :: proc() {
 
 
 
+
 	dirty, urgent := true, false
 	refresh_at, other_refresh_at: i64 // debounced reloads after directory changes
 	for app.running && !plat_closed() {

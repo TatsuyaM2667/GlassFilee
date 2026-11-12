@@ -6,6 +6,7 @@ package main
 
 import "core:math"
 import "core:strings"
+import "core:unicode/utf8"
 
 @(private = "file") grow: [32]f32
 @(private = "file") hover := -1
@@ -23,6 +24,7 @@ act_icon :: proc(a: Act) -> rune {
 	case .Compress:        return 0xf187
 	case .Cut:             return 0xf0c4
 	case .Copy:            return 0xf0c5
+	case .Copy_Path:       return 0xf0c1 // link
 	case .Paste:           return 0xf0ea
 	case .Rename:          return 0xf040
 	case .Bookmark:        return I_BOOKMARK
@@ -160,9 +162,15 @@ draw_menu :: proc() {
 		lx, ly := cx + math.cos(mid) * lr, cy + math.sin(mid) * lr
 		glyph_center({lx - px(14), ly - px(22), px(28), px(24)}, act_icon(it.act), fs(15 + 2 * g), fg)
 		arc := (lr * step) * 0.86
-		label := ellipsize(short(it.label), fs(11), arc)
-		tw := f32(text_width(label, fs(11), true))
-		text(lx - tw / 2, ly + px(16), label, fs(11), fg, true)
+		// long labels wrap onto a second line instead of being cut ("パスを / コピー")
+		l1, l2 := split_label(short(it.label), fs(11), arc)
+		tw := f32(text_width(l1, fs(11)))
+		dy := px(-5) if l2 != "" else 0
+		text(lx - tw / 2, ly + px(16) + dy, l1, fs(11), fg, true)
+		if l2 != "" {
+			tw2 := f32(text_width(l2, fs(11)))
+			text(lx - tw2 / 2, ly + px(29) + dy, l2, fs(11), fg, true)
+		}
 	}
 
 	// tag colors on an arc under the ring
@@ -218,4 +226,26 @@ draw_menu :: proc() {
 			menu_close(-1)
 		}
 	}
+}
+
+// Two-line label for a narrow slice: split near the middle, preferably after a
+// particle (を へ の に で と), so "パスをコピー" becomes "パスを / コピー".
+@(private = "file")
+split_label :: proc(label: string, size: i32, maxw: f32) -> (string, string) {
+	if f32(text_width(label, size)) <= maxw do return label, ""
+	runes := utf8.string_to_runes(label, context.temp_allocator)
+	n := len(runes)
+	if n < 2 do return ellipsize(label, size, maxw), ""
+	mid := (n + 1) / 2
+	cut := mid
+	best := 99
+	for i in max(1, mid - 2) ..= min(n - 1, mid + 2) {
+		switch runes[i - 1] {
+		case 'を', 'へ', 'の', 'に', 'で', 'と', ' ':
+			if abs(i - mid) < best {best = abs(i - mid); cut = i}
+		}
+	}
+	a := utf8.runes_to_string(runes[:cut], context.temp_allocator)
+	b := utf8.runes_to_string(runes[cut:], context.temp_allocator)
+	return ellipsize(strings.trim_space(a), size, maxw), ellipsize(strings.trim_space(b), size, maxw)
 }
