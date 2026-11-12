@@ -46,6 +46,8 @@ build_tree_view :: proc() {
 					name  = strings.concatenate({name, "/", fi.name}, a),
 					size  = fi.size,
 					mtime = fi.modification_time._nsec / 1_000_000_000,
+					btime = fi.creation_time._nsec / 1_000_000_000,
+					atime = fi.access_time._nsec / 1_000_000_000,
 				}
 				e.is_link = fi.type == .Symlink
 				e.is_dir = fi.type == .Directory || (e.is_link && os.is_dir(fi.fullpath))

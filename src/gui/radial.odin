@@ -25,6 +25,12 @@ act_icon :: proc(a: Act) -> rune {
 	case .Cut:             return 0xf0c4
 	case .Copy:            return 0xf0c5
 	case .Copy_Path:       return 0xf0c1 // link
+	case .Sort_Menu:       return I_SORT_MENU
+	case .Sort_Dir:        return 0xf160 if !app.sort_desc else 0xf161
+	case .Dirs_First:      return 0xf07b
+	case .Group_Menu:      return 0xf247 // object-group
+	case .Sort_By:         return 0xf0dc
+	case .Group_By:        return 0xf247
 	case .Paste:           return 0xf0ea
 	case .Rename:          return 0xf040
 	case .Bookmark:        return I_BOOKMARK
@@ -80,7 +86,8 @@ menu_key :: proc(key: u32) {
 	case K_RIGHT, K_DOWN, K_TAB: hover = (hover + 1) % n
 	case K_RETURN, K_KP_ENTER:
 		if hover >= 0 && hover < n && app.menu_items[idx[hover]].ok {
-			push(app.menu_items[idx[hover]].act, -1)
+			it := app.menu_items[idx[hover]]
+			push(it.act, it.arg if it.has_arg else -1)
 			menu_close(hover)
 		}
 	}
@@ -155,6 +162,7 @@ draw_menu :: proc() {
 		ro := r0 + (r1 - r0) * sp + g * px(12)
 		base := hex(0x1b2133, 245)
 		hot := with_alpha(DANGER, 245) if danger(it.act) else with_alpha(ACCENT, 245)
+		if it.on do base = mix(base, with_alpha(ACCENT, 245), 0.32) // current choice
 		col := mix(base, hot, g)
 		ring_seg(cx, cy, r0, ro, mid - step / 2 + gap, mid + step / 2 - gap, col)
 		fg := mix(FG if it.ok else with_alpha(FG, 80), hex(0x060913), g)
@@ -220,7 +228,8 @@ draw_menu :: proc() {
 	if closing do return
 	if app.pressed && color_hover < 0 {
 		if app.button == 1 && hover >= 0 && hover < n && app.menu_items[idx[hover]].ok {
-			push(app.menu_items[idx[hover]].act, -1)
+			it := app.menu_items[idx[hover]]
+			push(it.act, it.arg if it.has_arg else -1)
 			menu_close(hover)
 		} else {
 			menu_close(-1)

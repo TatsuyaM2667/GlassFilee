@@ -189,6 +189,8 @@ load_tag_view :: proc(path: string) -> bool {
 			name  = strings.clone(p[1:], virtual.arena_allocator(&app.listing)),
 			size  = info.size,
 			mtime = info.modification_time._nsec / 1_000_000_000,
+			btime = info.creation_time._nsec / 1_000_000_000,
+			atime = info.access_time._nsec / 1_000_000_000,
 		}
 		e.is_link = info.type == .Symlink
 		e.is_dir = info.type == .Directory || (e.is_link && os.is_dir(p))

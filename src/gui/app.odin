@@ -52,6 +52,7 @@ I_LINK :: 0xf0c1
 I_SORT_UP :: 0xf0de
 I_SORT_DOWN :: 0xf0dd
 I_PLUS :: 0xf067
+I_SORT_MENU :: 0xf160 // sort-amount-asc
 
 // ---------------------------------------------------------------------------
 // State
@@ -59,6 +60,7 @@ I_PLUS :: 0xf067
 Entry :: struct {
 	name:                     string,
 	size, mtime:              i64,
+	btime, atime:             i64, // created (0 if unknown) / last accessed
 	is_dir, is_link, hidden:  bool,
 	sel:                      bool,
 	kind:                     Kind,
@@ -77,6 +79,7 @@ Act :: enum {
 	New_Tab, Close_Tab, Switch_Tab, Next_Tab, Convert, Preview, Split, Undo,
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
 	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir, Copy_Path,
+	Sort_Menu, Sort_By, Sort_Dir, Dirs_First, Group_Menu, Group_By,
 }
 
 Pending :: struct {
@@ -94,7 +97,7 @@ Focus :: enum {
 }
 
 Sort_Key :: enum {
-	Name, Size, Modified,
+	Name, Modified, Created, Accessed, Size, Type, Ext, Tag,
 }
 
 Edit :: struct {
@@ -104,11 +107,14 @@ Edit :: struct {
 }
 
 Menu_Item :: struct {
-	label:  string,
-	act:    Act,
-	key:    string,
-	ok:     bool,
-	colors: bool, // row of tag color dots
+	label:   string,
+	act:     Act,
+	key:     string,
+	ok:      bool,
+	colors:  bool, // row of tag color dots
+	arg:     int, // passed to the action when has_arg (sort key, group)
+	has_arg: bool,
+	on:      bool, // current choice: drawn highlighted
 }
 
 Tab :: struct {
@@ -144,6 +150,10 @@ Pane :: struct {
 	search:            Edit,
 	searching:         bool,
 	git:               map[string]u8, // git status of entries (first path component)
+	groups:            [dynamic]Group, // sections of the view when grouping
+	lay:               [dynamic]Rect, // item rects (body coordinates), rebuilt each frame
+	hdrs:              [dynamic]Header, // group headers placed by layout_items
+	lay_h:             f32,
 	expanded:          map[string]f32, // tree view: expanded folders (rel name -> time expanded)
 	tree_loaded:       map[string]bool, // tree view: folders whose children are in entries
 }
@@ -162,6 +172,8 @@ App :: struct {
 	tree:              bool, // tree view (Obsidian-style); grid is false then
 	sort:              Sort_Key,
 	sort_desc:         bool,
+	dirs_first:        bool,
+	group:             Group_By,
 	now, dt, last_t:   f32,
 	animating:         bool, // something is still moving: keep drawing frames
 	menu_t0, dlg_t0:   f32,
@@ -296,6 +308,8 @@ load :: proc(path: string) -> bool {
 			name  = strings.clone(fi.name, a),
 			size  = fi.size,
 			mtime = fi.modification_time._nsec / 1_000_000_000,
+			btime = fi.creation_time._nsec / 1_000_000_000,
+			atime = fi.access_time._nsec / 1_000_000_000,
 		}
 		e.is_link = fi.type == .Symlink
 		e.is_dir = fi.type == .Directory || (e.is_link && os.is_dir(fi.fullpath))
@@ -332,17 +346,6 @@ natural_less :: proc(a, b: string) -> bool {
 is_digit :: proc(c: u8) -> bool {return c >= '0' && c <= '9'}
 to_lower :: proc(c: u8) -> u8 {return c + 32 if c >= 'A' && c <= 'Z' else c}
 
-entry_less :: proc(x, y: int) -> bool {
-	a, b := &app.entries[x], &app.entries[y]
-	if a.is_dir != b.is_dir do return a.is_dir
-	less: bool
-	switch app.sort {
-	case .Name:     less = natural_less(a.name, b.name)
-	case .Size:     less = a.size < b.size if a.size != b.size else natural_less(a.name, b.name)
-	case .Modified: less = a.mtime < b.mtime if a.mtime != b.mtime else natural_less(a.name, b.name)
-	}
-	return !less if app.sort_desc else less
-}
 
 refilter :: proc() {
 	clear(&app.view)
@@ -354,8 +357,10 @@ refilter :: proc() {
 		if q != "" && !strings.contains(strings.to_lower(filepath.base(e.name), context.temp_allocator), q) do continue
 		append(&app.view, i)
 	}
+	prepare_sort()
 	slice.sort_by(app.view[:], entry_less)
 	if tree_mode() do build_tree_view()
+	build_groups()
 	if app.focus >= len(app.view) do app.focus = len(app.view) - 1
 }
 
@@ -751,9 +756,9 @@ run_pending :: proc() {
 				app.edit_focus = .Search
 			}
 			refilter()
-		case .View_Grid: app.grid, app.tree = true, false
-		case .View_List: app.grid, app.tree = false, false; refilter()
-		case .View_Tree: app.grid, app.tree = false, true; refilter()
+		case .View_Grid: app.grid, app.tree = true, false; refilter(); save_view_prefs()
+		case .View_List: app.grid, app.tree = false, false; refilter(); save_view_prefs()
+		case .View_Tree: app.grid, app.tree = false, true; refilter(); save_view_prefs()
 		case .Tree_Toggle: if p.i >= 0 && p.i < len(app.entries) do tree_toggle(p.i)
 		case .Main_Menu: open_menu(p.i, true)
 		case .Context:   open_menu(p.i, false)
@@ -777,6 +782,27 @@ run_pending :: proc() {
 			if app.sort == k do app.sort_desc = !app.sort_desc
 			else {app.sort = k; app.sort_desc = k != .Name}
 			refilter()
+			save_view_prefs()
+		case .Sort_Menu:  open_sort_menu()
+		case .Group_Menu: open_group_menu()
+		case .Sort_By:
+			app.sort = Sort_Key(p.i)
+			app.sort_desc = app.sort == .Modified || app.sort == .Created || app.sort == .Accessed || app.sort == .Size // newest / biggest first
+			refilter()
+			save_view_prefs()
+			toastf("%sで並べ替え（%s）", SORT_NAMES[app.sort], "降順" if app.sort_desc else "昇順")
+		case .Sort_Dir:
+			app.sort_desc = !app.sort_desc
+			refilter()
+			save_view_prefs()
+		case .Dirs_First:
+			app.dirs_first = !app.dirs_first
+			refilter()
+			save_view_prefs()
+		case .Group_By:
+			app.group = Group_By(p.i)
+			refilter()
+			save_view_prefs()
 		case .Dialog_Ok: dialog_ok()
 		case .Dialog_Cancel:
 			if app.dialog == .Props do props_close()
@@ -869,6 +895,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("一覧表示", .View_List, "Ctrl+1")
 		add("ツリー表示", .View_Tree, "Ctrl+3")
 		add("2画面表示を閉じる" if app.split else "2画面表示", .Split, "F3")
+		add("並べ替え…", .Sort_Menu)
 		add("隠しファイルを隠す" if app.show_hidden else "隠しファイルを表示", .Hidden, "Ctrl+H")
 		add("再読み込み", .Reload, "F5")
 		sep()
@@ -912,6 +939,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		sep()
 		add("端末で開く", .Terminal)
 		add("パスをコピー", .Copy_Path, "Shift+Ctrl+C")
+		add("並べ替え…", .Sort_Menu)
 		add("隠しファイルを隠す" if app.show_hidden else "隠しファイルを表示", .Hidden, "Ctrl+H")
 		add("ブックマークに追加", .Bookmark, "Ctrl+D")
 		if is_music_folder() do add("すべて再生", .Play_All)
@@ -1171,6 +1199,7 @@ LIST_HEAD_H :: 32
 
 item_rect :: proc(k: int) -> Rect {
 	// in body coordinates (before scroll)
+	if k < len(app.lay) && len(app.lay) == len(app.view) do return app.lay[k]
 	if app.grid {
 		pad := px(12)
 		cw := (app.body.w - 2 * pad) / f32(app.cols)
@@ -1182,6 +1211,7 @@ item_rect :: proc(k: int) -> Rect {
 
 content_height :: proc() -> f32 {
 	n := len(app.view)
+	if len(app.lay) == n && n > 0 do return app.lay_h
 	if app.grid do return px(24) + f32((n + app.cols - 1) / max(app.cols, 1)) * px(GRID_CELL_H)
 	if tree_mode() do return px(TREE_HEAD) + f32(n) * px(TREE_ROW) + px(48)
 	return px(LIST_HEAD_H) + f32(n) * px(LIST_ROW_H) + px(48)
@@ -1310,6 +1340,12 @@ draw_header :: proc(r: Rect) {
 	if app.tree do next_icon, next_act = I_GRID, .View_Grid
 	if icon_button({right, y, bs, bs}, next_icon) do push(next_act)
 	right -= bs + px(2)
+	if icon_button({right, y, bs, bs}, I_SORT_MENU, app.group != .None) {
+		app.mx, app.my = right + bs / 2, y + bs + px(150)
+		app.menu_pos = {app.mx, app.my}
+		push(.Sort_Menu)
+	}
+	right -= bs + px(2)
 	if icon_button({right, y, bs, bs}, I_SEARCH, app.searching) do push(.Search)
 	if visible_jobs() || app.walking {
 		right -= bs + px(2)
@@ -1418,6 +1454,7 @@ draw_body :: proc() {
 	}
 	n := len(app.view)
 	app.cols = max(1, int((b.w - px(24)) / px(GRID_CELL_W)))
+	layout_items() // rects for every item (and group headers) at this width
 	max_scroll := max(0, content_height() - b.h)
 	if app.wheel != 0 && hovering(b) do app.scroll_to -= app.wheel * px(72)
 	app.scroll_to = clamp(app.scroll_to, 0, max_scroll)
@@ -1462,20 +1499,17 @@ draw_body :: proc() {
 	}
 
 	tree := tree_mode()
-	head_h, row_h := px(LIST_HEAD_H), px(LIST_ROW_H)
-	if tree do head_h, row_h = px(TREE_HEAD), px(TREE_ROW)
+	head_h := px(LIST_HEAD_H)
+	if tree do head_h = px(TREE_HEAD)
 	if tree do draw_tree_header(b)
 	else if !app.grid do draw_list_header(b)
+	// visible range from the layout table (rects grow with k)
 	first, last := 0, n
-	if app.grid {
-		rh := px(GRID_CELL_H)
-		first = max(0, int((app.scroll - px(12)) / rh) * app.cols)
-		last = min(n, (int((app.scroll + b.h) / rh) + 2) * app.cols)
-	} else {
-		first = max(0, int((app.scroll - head_h) / row_h))
-		last = min(n, first + int(b.h / row_h) + 2)
-	}
+	for first < n && app.lay[first].y + app.lay[first].h < app.scroll do first += 1
+	last = first
+	for last < n && app.lay[last].y < app.scroll + b.h do last += 1
 	if !app.grid do set_clip({b.x, b.y + head_h, b.w, b.h - head_h})
+	draw_group_headers(b)
 	for k in first ..< last {
 		vi := app.view[k]
 		e := &app.entries[vi]
@@ -2065,6 +2099,7 @@ main :: proc() {
 	td := gf.trash_dir()
 	app.trash_files, _ = filepath.join({td, "files"})
 	app.grid = true
+	load_view_prefs()
 	app.focus, app.anchor = -1, -1
 	app.running = true
 	app.S = 1
@@ -2343,6 +2378,7 @@ step_walk :: proc(budget_ms: i64 = 6) -> bool {
 			if strings.contains(strings.to_lower(fi.name, context.temp_allocator), app.walk_q) {
 				append(&app.entries, Entry {
 					name = child, size = fi.size, mtime = fi.modification_time._nsec / 1_000_000_000,
+					btime = fi.creation_time._nsec / 1_000_000_000, atime = fi.access_time._nsec / 1_000_000_000,
 					is_dir = is_dir, is_link = fi.type == .Symlink, hidden = hidden, kind = kind_of(fi.name, fi.mode),
 				})
 				added = true

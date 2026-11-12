@@ -86,3 +86,29 @@ xml_text_extract :: proc(t: ^testing.T) {
 	xml_text(`<html><head><title>T</title><style>p{color:red}</style></head><body><p>本文</p><script>var x=1;</script><br/>次</body></html>`, &h)
 	testing.expect_value(t, strings.to_string(h), "本文\n\n次")
 }
+
+@(test)
+test_sort_and_group :: proc(t: ^testing.T) {
+	saved_entries, saved_sort, saved_desc, saved_dirs, saved_group := app.entries, app.sort, app.sort_desc, app.dirs_first, app.group
+	defer {app.entries, app.sort, app.sort_desc, app.dirs_first, app.group = saved_entries, saved_sort, saved_desc, saved_dirs, saved_group}
+	es := [?]Entry {
+		{name = "b.txt", size = 50, kind = .Text},
+		{name = "dir", is_dir = true},
+		{name = "a.png", size = 5_000_000, kind = .Image},
+		{name = "c.txt", size = 0, kind = .Text},
+	}
+	app.entries = make([dynamic]Entry, context.temp_allocator)
+	append(&app.entries, ..es[:])
+	app.group, app.dirs_first, app.sort, app.sort_desc = .None, true, .Size, true
+	testing.expect(t, entry_less(1, 2)) // folders first beats size
+	testing.expect(t, entry_less(2, 0)) // bigger first when descending
+	app.dirs_first = false
+	testing.expect(t, entry_less(1, 3)) // equal sizes: name tiebreak, reversed too when descending
+	app.group, app.sort, app.sort_desc = .Size, .Name, false
+	r, _ := group_key(&app.entries[3])
+	testing.expect_value(t, r, 1) // empty
+	testing.expect(t, entry_less(3, 0)) // empty group before small group, despite the name
+	testing.expect_value(t, group_label(&app.entries[2]), "中（10 MB 未満）")
+	app.group = .Ext
+	testing.expect(t, entry_less(2, 0)) // PNG group before TXT group
+}
