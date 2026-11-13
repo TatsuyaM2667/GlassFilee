@@ -8,6 +8,7 @@ package main
 
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 
@@ -240,7 +241,11 @@ toml_dep :: proc(toml, dep: string) -> bool {
 	return false
 }
 
+// A framework found in the manifest wins (React, Yew, Django…); otherwise the language
+// with the most source code (by bytes) — so a mostly-Odin repo with a small build.zig
+// is Odin, not Zig. Folders with no manifest, build file or .git get no badge.
 project_detect :: proc(dir: string) -> (Lang, bool) {
+	marker: Lang // language a manifest implies, used when no source files are found
 	if pkg, ok := read_small(dir, "package.json"); ok {
 		has :: proc(pkg, dep: string) -> bool {return strings.contains(pkg, strings.concatenate({"\"", dep}, context.temp_allocator))}
 		switch {
@@ -258,7 +263,7 @@ project_detect :: proc(dir: string) -> (Lang, bool) {
 		case has(pkg, "express\""):         return FW_EXPRESS, true
 		case has(pkg, "vite\""):            return FW_VITE, true
 		}
-		return FW_NODE, true
+		marker = FW_NODE
 	}
 	if cargo, ok := read_small(dir, "Cargo.toml"); ok {
 		switch {
@@ -268,12 +273,15 @@ project_detect :: proc(dir: string) -> (Lang, bool) {
 		case toml_dep(cargo, "bevy"):   return FW_BEVY, true
 		case toml_dep(cargo, "tauri"):  return FW_TAURI, true
 		}
-		return LG_RUST, true
+		marker = LG_RUST
 	}
-	if pub, ok := read_small(dir, "pubspec.yaml"); ok do return (FW_FLUTTER if strings.contains(pub, "flutter") else LG_DART), true
+	if pub, ok := read_small(dir, "pubspec.yaml"); ok {
+		if strings.contains(pub, "flutter") do return FW_FLUTTER, true
+		marker = LG_DART
+	}
 	if exists_in(dir, "manage.py") do return FW_DJANGO, true
 	if exists_in(dir, "artisan") do return FW_LARAVEL, true
-	for f in ([]string{"pyproject.toml", "requirements.txt"}) {
+	for f in ([]string{"pyproject.toml", "requirements.txt", "setup.py"}) {
 		if py, ok := read_small(dir, f); ok {
 			low := strings.to_lower(py, context.temp_allocator)
 			switch {
@@ -281,20 +289,79 @@ project_detect :: proc(dir: string) -> (Lang, bool) {
 			case strings.contains(low, "fastapi"): return FW_FASTAPI, true
 			case strings.contains(low, "flask"):   return FW_FLASK, true
 			}
-			return LG_PYTHON, true
+			marker = LG_PYTHON
 		}
 	}
-	if gem, ok := read_small(dir, "Gemfile"); ok do return (FW_RAILS if strings.contains(gem, "rails") else LG_RUBY), true
-	if comp, ok := read_small(dir, "composer.json"); ok do return (FW_LARAVEL if strings.contains(comp, "laravel/") else LG_PHP), true
-	for f in ([]string{"pom.xml", "build.gradle", "build.gradle.kts"}) {
-		if j, ok := read_small(dir, f); ok do return (FW_SPRING if strings.contains(j, "springframework") else LG_JAVA), true
+	if gem, ok := read_small(dir, "Gemfile"); ok {
+		if strings.contains(gem, "rails") do return FW_RAILS, true
+		marker = LG_RUBY
 	}
-	if exists_in(dir, "go.mod") do return LG_GO, true
-	if exists_in(dir, "build.zig") do return LG_ZIG, true
+	if comp, ok := read_small(dir, "composer.json"); ok {
+		if strings.contains(comp, "laravel/") do return FW_LARAVEL, true
+		marker = LG_PHP
+	}
+	for f in ([]string{"pom.xml", "build.gradle", "build.gradle.kts"}) {
+		if j, ok := read_small(dir, f); ok {
+			if strings.contains(j, "springframework") do return FW_SPRING, true
+			marker = LG_JAVA
+		}
+	}
 	if exists_in(dir, "deno.json") || exists_in(dir, "deno.jsonc") do return FW_DENO, true
 	if cm, ok := read_small(dir, "CMakeLists.txt"); ok && (strings.contains(cm, "Qt6") || strings.contains(cm, "Qt5")) do return FW_QT, true
-	if exists_in(dir, "supabase") && exists_in(dir, "supabase/config.toml") do return FW_SUPABASE, true
-	return {}, false
+	if exists_in(dir, "supabase/config.toml") do return FW_SUPABASE, true
+	if exists_in(dir, "go.mod") do marker = LG_GO
+	if exists_in(dir, "build.zig") do marker = LG_ZIG
+
+	is_project := marker.icon != ""
+	if !is_project {
+		for f in ([]string{".git", "Makefile", "CMakeLists.txt", "meson.build", "build.sh", "flake.nix"}) do if exists_in(dir, f) do is_project = true
+	}
+	if !is_project do return {}, false
+	if l, ok := main_language(dir); ok do return l, true
+	return marker, marker.icon != ""
+}
+
+// Languages that count as "the project's language" (not data / docs / config).
+@(private = "file")
+LANGUAGE_NAMES := map[string]string {
+	"python" = "Python", "javascript" = "JavaScript", "typescript" = "TypeScript", "react" = "React",
+	"rust" = "Rust", "go" = "Go", "c" = "C", "cplusplus" = "C++", "openjdk" = "Java", "kotlin" = "Kotlin",
+	"lua" = "Lua", "ruby" = "Ruby", "html5" = "HTML", "css" = "CSS", "sass" = "Sass", "r" = "R",
+	"swift" = "Swift", "php" = "PHP", "csharp" = "C#", "haskell" = "Haskell", "gnubash" = "Shell",
+	"vuedotjs" = "Vue", "dart" = "Dart", "zig" = "Zig", "nixos" = "Nix", "elixir" = "Elixir",
+	"scala" = "Scala", "julia" = "Julia", "clojure" = "Clojure", "ocaml" = "OCaml", "perl" = "Perl",
+	"nim" = "Nim", "elm" = "Elm", "fsharp" = "F#", "powershell" = "PowerShell", "odin" = "Odin",
+	"svelte" = "Svelte", "astro" = "Astro", "jupyter" = "Jupyter", "latex" = "LaTeX",
+}
+
+// Build output, dependencies and caches are not the project's own code.
+@(private = "file")
+SKIP_DIRS :: []string {"node_modules", "target", "zig-cache", "zig-out", "build", "dist", "out", "vendor", "third_party", "venv", "__pycache__", "Pods", "bin", "obj"}
+
+// The language with the most bytes of source, looking up to 3 levels deep (at most ~4000 entries).
+main_language :: proc(dir: string) -> (Lang, bool) {
+	bytes := make(map[string]i64, 16, context.temp_allocator)
+	budget := 4000
+	walk :: proc(dir: string, depth: int, bytes: ^map[string]i64, budget: ^int) {
+		infos, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+		if err != nil do return
+		for fi in infos {
+			if budget^ <= 0 do return
+			budget^ -= 1
+			if strings.has_prefix(fi.name, ".") do continue
+			if fi.type == .Directory {
+				if depth < 3 && !slice.contains(SKIP_DIRS, fi.name) do walk(fi.fullpath, depth + 1, bytes, budget)
+				continue
+			}
+			ext := strings.to_lower(filepath.ext(fi.name), context.temp_allocator)
+			if icon, ok := LANG_BY_EXT[ext]; ok && icon in LANGUAGE_NAMES do bytes[icon] += max(fi.size, 1)
+		}
+	}
+	walk(dir, 0, &bytes, &budget)
+	best, most := "", i64(0)
+	for icon, n in bytes do if n > most || n == most && icon < best {best, most = icon, n}
+	if best == "" do return {}, false
+	return {best, LANGUAGE_NAMES[best]}, true
 }
 
 // Cached per folder; only folders actually drawn are looked at.

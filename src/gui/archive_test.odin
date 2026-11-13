@@ -210,3 +210,20 @@ test_svg_rasterize :: proc(t: ^testing.T) {
 	img = svg_rasterize(`<svg viewBox="0 0 4 4"><defs><linearGradient id="g"><stop stop-color="#000"/><stop stop-color="#fefefe"/></linearGradient></defs><path fill="url(#g)" d="m0 0h4v4h-4z"/></svg>`, 4, context.temp_allocator)
 	testing.expect_value(t, img[5], u32(0xff7f7f7f))
 }
+
+@(test)
+test_project_main_language :: proc(t: ^testing.T) {
+	dir := "/tmp/ame-fm-test-lang"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	_ = os.make_directory_all("/tmp/ame-fm-test-lang/src/gui")
+	_ = os.make_directory_all("/tmp/ame-fm-test-lang/zig-out")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-lang/build.zig", "const std = @import(\"std\");")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-lang/src/gui/app.odin", strings.repeat("x := 1\n", 500, context.temp_allocator))
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-lang/zig-out/huge.zig", strings.repeat("// build output\n", 5000, context.temp_allocator))
+	l, ok := project_detect(dir)
+	testing.expect(t, ok && l.label == "Odin") // most code is Odin; build.zig and zig-out don't decide it
+	_ = os.remove_all("/tmp/ame-fm-test-lang/src")
+	l, ok = project_detect(dir)
+	testing.expect(t, ok && l.label == "Zig") // no sources: the build file still says Zig
+}
