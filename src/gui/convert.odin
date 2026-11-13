@@ -429,13 +429,14 @@ mix :: proc(a, b: Color, t: f32) -> Color {
 }
 
 // Progress ring around an icon while it converts (frac > 1 = unknown: spinning arc).
-progress_ring :: proc(r: Rect, frac: f32) {
+progress_ring :: proc(r: Rect, frac: f32, label := true) {
 	cx, cy := r.x + r.w / 2, r.y + r.h / 2
 	rad := max(r.w, r.h) / 2 + px(4)
 	ring_seg(cx, cy, rad - px(3), rad, 0, 2 * math.PI, hex(0xffffff, 30))
 	app.animating = true
 	if frac <= 1 {
 		ring_seg(cx, cy, rad - px(3), rad, -math.PI / 2, -math.PI / 2 + max(frac, 0.02) * 2 * math.PI, ACCENT)
+		if !label do return
 		pct := strings.concatenate({itoa_tmp(int(frac * 100)), "%"}, context.temp_allocator)
 		pw := f32(text_width(pct, fs(10), true))
 		rrect({cx - pw / 2 - px(5), r.y + r.h - px(4), pw + px(10), px(16)}, px(8), with_alpha(ACCENT, 230))

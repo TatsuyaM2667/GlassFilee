@@ -145,3 +145,13 @@ test_folder_sort_memory :: proc(t: ^testing.T) {
 	testing.expect_value(t, app.sort, Sort_Key.Modified)
 	testing.expect(t, !app.sort_desc)
 }
+
+@(test)
+test_drop_into_self :: proc(t: ^testing.T) {
+	defer drag_clear()
+	append(&dd.paths, strings.clone("/home/u/写真"))
+	testing.expect(t, !dir_ok("/home/u/写真"))
+	testing.expect(t, !dir_ok("/home/u/写真/2026"))
+	testing.expect(t, dir_ok("/home/u/写真2")) // only a real subfolder counts
+	testing.expect(t, dir_ok("/home/u"))
+}

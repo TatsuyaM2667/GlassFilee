@@ -207,7 +207,11 @@ draw_sidebar :: proc(w, H: f32) {
 	set_clip({0, hh, w, H - hh})
 	defer reset_clip()
 	y := hh + px(6)
-	nav :: proc(r: Rect, path: string) {
+	nav :: proc(r: Rect, path, label: string, kind := Drop_Kind.Dir) {
+		if b := bounce_of(path); b > 0 do rrect(r, px(6), with_alpha(ACCENT, u8(min(b * 900, 120))))
+		if _, _, spring := drop_hover(r, kind, path, label, px(6)); spring > 0 {
+			progress_ring({r.x + r.w - px(22), r.y + r.h / 2 - px(5), px(10), px(10)}, spring, false)
+		}
 		if clicked(r) do push(.Navigate, 0, path)
 		if hovering(r) && app.pressed && app.button == 2 do push(.New_Tab, 0, path)
 		if hovering(r) && app.pressed && app.button == 3 {
@@ -219,16 +223,16 @@ draw_sidebar :: proc(w, H: f32) {
 	}
 	for p in app.places {
 		if p.icon == I_TRASH || p.icon == I_DRIVE do continue
-		nav(side_row(&y, w, p.icon, p.label, app.cwd == p.path), p.path)
+		nav(side_row(&y, w, p.icon, p.label, app.cwd == p.path), p.path, p.label)
 	}
 	if len(bookmarks) > 0 {
 		side_section(&y, w, "ブックマーク")
-		for b in bookmarks do nav(side_row(&y, w, I_BOOKMARK, b.label, app.cwd == b.path), b.path)
+		for b in bookmarks do nav(side_row(&y, w, I_BOOKMARK, b.label, app.cwd == b.path), b.path, b.label)
 	}
 	side_section(&y, w, "")
 	for p in app.places {
 		if p.icon != I_TRASH && p.icon != I_DRIVE do continue
-		nav(side_row(&y, w, p.icon, p.label, app.cwd == p.path), p.path)
+		nav(side_row(&y, w, p.icon, p.label, app.cwd == p.path), p.path, p.label, .Trash if p.icon == I_TRASH else .Dir)
 	}
 	for d in devices {
 		r := side_row(&y, w, I_USB, d.label, d.path != "" && app.cwd == d.path, d.path == "")
@@ -240,7 +244,7 @@ draw_sidebar :: proc(w, H: f32) {
 		if hovering(er) do rrect(er, px(6), HOVER)
 		glyph_center(er, I_EJECT, fs(13), DIM)
 		if clicked(er) do eject_device(d)
-		else do nav(r, d.path)
+		else do nav(r, d.path, d.label)
 	}
 	draw_sidebar_tags(&y, w)
 }

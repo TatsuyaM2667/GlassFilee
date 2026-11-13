@@ -209,7 +209,6 @@ App :: struct {
 	idrag_x, idrag_y:  f32,
 	dnd_on:            bool, // something is being dragged over the window
 	dnd_x, dnd_y:      f32,
-	drop_dir:          string, // where a drop would land (computed while drawing)
 	blocked:           bool,
 	hdr_hot:           [dynamic]Rect,
 	header_h:          f32,
@@ -539,15 +538,19 @@ do_trash :: proc() {
 		app.dialog = .Confirm_Delete
 		return
 	}
+	paths := make([dynamic]string, context.temp_allocator)
+	for vi in sel do append(&paths, strings.clone(full_path(app.entries[vi].name), context.temp_allocator))
+	trash_paths(paths[:])
+}
+
+trash_paths :: proc(paths: []string) {
 	n, failed := 0, 0
 	last := ""
 	undo := make([dynamic][2]string, context.temp_allocator)
-	for vi in sel {
-		name := app.entries[vi].name
-		path := full_path(name)
+	for path in paths {
 		if st, tname := gf.trash_path_named(path); st == .Success {
 			n += 1
-			last = strings.clone(filepath.base(name), context.temp_allocator)
+			last = strings.clone(filepath.base(path), context.temp_allocator)
 			append(&undo, [2]string{path, strings.clone(tname, context.temp_allocator)})
 		} else do failed += 1
 	}
@@ -1252,13 +1255,10 @@ frame :: proc() {
 			app.idrag_on = false
 		} else if math.hypot(app.mx - app.idrag_x, app.my - app.idrag_y) > px(8) {
 			app.idrag_on = false
-			paths := make([dynamic]string, context.temp_allocator)
-			for vi in selection() do append(&paths, full_path(app.entries[vi].name))
-			plat_start_drag(paths[:])
+			drag_begin()
 		}
 	}
-	delete(app.drop_dir)
-	app.drop_dir = ""
+	drag_frame_begin()
 	if app.cdrag_on {
 		if app.released {
 			if app.cdrag_toggle >= 0 && app.cdrag_toggle < len(app.entries) do app.entries[app.cdrag_toggle].sel = false
@@ -1314,6 +1314,7 @@ frame :: proc() {
 	draw_donut()
 	app.ops_h = draw_ops(W, H)
 	draw_toast(W, H)
+	draw_drag_overlay(W, H)
 }
 
 
@@ -1449,14 +1450,11 @@ draw_pathbar :: proc(bar: Rect) {
 
 draw_body :: proc() {
 	b := app.body
-	if app.dnd_on && contains(b, app.dnd_x, app.dnd_y) && app.drop_dir == "" && !in_trash() {
-		app.drop_dir = strings.clone(app.cwd)
-		rrect(shrink(b, px(4)), px(12), with_alpha(ACCENT, 140), px(2)) // drop into this folder
-	}
 	n := len(app.view)
 	app.cols = max(1, int((b.w - px(24)) / px(GRID_CELL_W)))
 	layout_items() // rects for every item (and group headers) at this width
 	max_scroll := max(0, content_height() - b.h)
+	drag_autoscroll(b, max_scroll)
 	if app.wheel != 0 && hovering(b) do app.scroll_to -= app.wheel * px(72)
 	app.scroll_to = clamp(app.scroll_to, 0, max_scroll)
 	if d := app.scroll_to - app.scroll; abs(d) < 0.5 {
@@ -1476,6 +1474,7 @@ draw_body :: proc() {
 		tw := f32(text_width(msg, size, true))
 		text(b.x + (b.w - tw) / 2, cy + px(20), msg, size, DIM, true)
 		if hovering(b) && app.pressed && app.button == 3 do push(.Context, -1)
+		body_drop(b)
 		return
 	}
 
@@ -1536,23 +1535,22 @@ draw_body :: proc() {
 		defer draw_alpha = 255
 		hit := shrink(r, px(3)) if app.grid else Rect{r.x + px(6), r.y + px(1), r.w - px(12), r.h - px(2)}
 		hov := hovering(hit) && !app.band_on
-		if app.dnd_on && e.is_dir && contains(hit, app.dnd_x, app.dnd_y) {
-			delete(app.drop_dir)
-			app.drop_dir = strings.clone(full_path(e.name))
-			rrect(hit, px(10 if app.grid else 8), with_alpha(ACCENT, 60))
-			rrect(hit, px(10 if app.grid else 8), ACCENT, px(2))
-		}
+		drop_t, spring: f32 = 0, -1
+		if e.is_dir do _, drop_t, spring = drop_hover(hit, .Dir, full_path(e.name), filepath.base(e.name), px(10 if app.grid else 8))
+		pop := 1 + 0.12 * drop_t + (bounce_of(full_path(e.name)) if dd.bounce != "" else 0)
+		if e.sel && dragging_own() && app.cwd == dd.src_dir do draw_alpha = min(draw_alpha, 110) // lifted out
 		if e.sel do rrect(hit, px(10 if app.grid else (6 if tree else 8)), with_alpha(OBSIDIAN, 70) if tree else SEL)
 		else if hov do rrect(hit, px(10 if app.grid else (6 if tree else 8)), HOVER)
 		col := with_alpha(FG, 150) if e.hidden else FG
 		if tree {
 			draw_tree_row(e, r, hit, hov)
 		} else if app.grid {
-			is := px(64)
-			ix, iy := r.x + (r.w - is) / 2, r.y + px(8)
+			is := px(64) * pop
+			ix, iy := r.x + (r.w - is) / 2, r.y + px(8) - (is - px(64)) / 2
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
 			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)), tint_of(e.name))
+			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
 			else do file_icon(ix, iy, is, e.kind)
 			if !e.is_dir do file_tag_dots(ix + px(6), iy + px(10), px(6), e.name) // folders show it as their own color
@@ -1566,11 +1564,12 @@ draw_body :: proc() {
 			text(r.x + (r.w - f32(text_width(l1, size))) / 2, ty, l1, size, col)
 			if l2 != "" do text(r.x + (r.w - f32(text_width(l2, size))) / 2, ty + px(18), l2, size, col)
 		} else {
-			is := px(28)
-			ix, iy := r.x + px(16), r.y + (r.h - is) / 2
+			is := px(28) * pop
+			ix, iy := r.x + px(16) - (is - px(28)) / 2, r.y + (r.h - is) / 2
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
 			if e.is_dir do folder_icon(ix, iy, is, 0, tint_of(e.name))
+			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
 			else do file_icon(ix, iy, is, e.kind)
 			if !e.is_dir do file_tag_dots(ix + px(2), iy + px(4), px(5), e.name)
@@ -1630,6 +1629,7 @@ draw_body :: proc() {
 		}
 	}
 	set_clip(b)
+	body_drop(b)
 
 	if app.band_on && band.w > 0 && band.h > 0 {
 		br := Rect{bx + band.x, by + band.y, band.w, band.h}
@@ -2011,18 +2011,17 @@ on_event :: proc(ev: Ev) -> bool {
 		refresh_devices() // drives may have been plugged in meanwhile
 	case .Dnd_Motion:
 		app.dnd_on, app.dnd_x, app.dnd_y = true, ev.x * app.S, ev.y * app.S
+		dd.mods = ev.mods
+		plat_drag_icon_show(false) // over our window we draw the ghost ourselves
 	case .Dnd_Leave:
 		app.dnd_on = false
+		plat_drag_icon_show(true)
 	case .Drag_End:
 		app.held, app.idrag_on = false, false
+		if dd.fly_t0 == 0 do drag_clear()
 	case .Dnd_Drop:
 		app.dnd_on = false
-		dir := strings.clone(app.drop_dir, context.temp_allocator)
-		if dir == "" do return true
-		srcs := strings.split(ev.text, "\n", context.temp_allocator)
-		same := true
-		for p in srcs do if filepath.dir(p) != dir do same = false
-		if !same do start_op(srcs, dir, ev.button == 2) // dropping where it already is does nothing
+		drag_drop(ev.text, ev.button)
 		return true
 	}
 	return false
@@ -2310,6 +2309,7 @@ draw_tabbar :: proc(r: Rect) {
 		tr := Rect{x0 + f32(i) * tw + px(2), r.y + px(4), tw - px(4), r.h - px(9)}
 		hov := hovering(tr)
 		if hov && i != app.cur_tab do rrect(tr, px(7), HOVER)
+		tab_drag_hover(tr, i)
 		title := ellipsize(tab_title(i), size, tr.w - px(44), i == app.cur_tab)
 		ttw := f32(text_width(title, size, i == app.cur_tab))
 		text(tr.x + (tr.w - ttw) / 2, baseline(tr, size), title, size, FG if i == app.cur_tab else DIM, i == app.cur_tab)

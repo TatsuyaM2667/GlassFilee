@@ -207,6 +207,8 @@ W :: struct {
 	drag_source:                                  Proxy, // our own drag in progress
 	drag_payload:                                 [3]string,
 	drag_paths:                                   string, // newline separated, for drops onto ourselves
+	drag_icon, drag_icon_buf:                     Proxy, // picture under the pointer while our drag is outside the window
+	drag_icon_shown:                              bool,
 	pool_mem:                                     rawptr,
 	pool_size:                                    int,
 	buf_w, buf_h:                                 i32,
@@ -699,6 +701,7 @@ on_source :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl
 		if target == w.source do w.source = nil
 		if target == w.drag_source {
 			w.drag_source = nil
+			drop_drag_icon()
 			append(&events, Ev{kind = .Drag_End})
 		}
 		wl_proxy_marshal_flags(target, 1, nil, ver(target), 1)
@@ -749,7 +752,9 @@ new_source :: proc() -> Proxy {
 }
 
 // Starts dragging files out of the window (other apps, our folders, the other pane).
-plat_start_drag :: proc(paths: []string) {
+// icon (premultiplied ARGB, iw×ih buffer pixels) is shown only outside our window;
+// inside it the app draws its own animated ghost.
+plat_start_drag :: proc(paths: []string, icon: []u32 = nil, iw: i32 = 0, ih: i32 = 0) {
 	if w.ddm == nil || w.ddev == nil || w.drag_source != nil || len(paths) == 0 do return
 	for s in w.drag_payload do delete(s)
 	delete(w.drag_paths)
@@ -757,8 +762,49 @@ plat_start_drag :: proc(paths: []string) {
 	w.drag_paths = strings.join(paths, "\n")
 	src := new_source()
 	if ver(src) >= 3 do wl_proxy_marshal_flags(src, 2, nil, ver(src), 0, u32(3)) // copy | move
-	wl_proxy_marshal_flags(w.ddev, 0, nil, ver(w.ddev), 0, src, w.surface, rawptr(nil), w.serial)
+	drop_drag_icon()
+	if len(icon) == int(iw * ih) && iw > 0 do make_drag_icon(icon, iw, ih)
+	wl_proxy_marshal_flags(w.ddev, 0, nil, ver(w.ddev), 0, src, w.surface, w.drag_icon, w.serial)
 	w.drag_source = src
+}
+
+plat_dragging :: proc() -> bool {return w.drag_source != nil}
+
+// Shows / hides the compositor-drawn drag icon (hidden over our own window).
+plat_drag_icon_show :: proc(on: bool) {
+	if w.drag_icon == nil || w.drag_icon_shown == on do return
+	w.drag_icon_shown = on
+	wl_proxy_marshal_flags(w.drag_icon, 1, nil, ver(w.drag_icon), 0, w.drag_icon_buf if on else nil, i32(0), i32(0)) // attach
+	if on do wl_proxy_marshal_flags(w.drag_icon, 2, nil, ver(w.drag_icon), 0, i32(0), i32(0), i32(1 << 20), i32(1 << 20)) // damage
+	wl_proxy_marshal_flags(w.drag_icon, 6, nil, ver(w.drag_icon), 0) // commit
+}
+
+@(private = "file")
+make_drag_icon :: proc(icon: []u32, iw, ih: i32) {
+	size := int(iw * ih * 4)
+	name := strings.clone_to_cstring(fmt.tprintf("/ame-filemanager-drag-%d-%d", posix.getpid(), ticks_ms()), context.temp_allocator)
+	fd := posix.shm_open(name, {.RDWR, .CREAT, .EXCL, .CLOEXEC}, {.IRUSR, .IWUSR})
+	if fd < 0 do return
+	posix.shm_unlink(name)
+	defer posix.close(fd)
+	if posix.ftruncate(fd, posix.off_t(size)) != .OK do return
+	mem := posix.mmap(nil, uint(size), {.READ, .WRITE}, {.SHARED}, fd, 0)
+	if mem == posix.MAP_FAILED do return
+	copy(([^]u32)(mem)[:len(icon)], icon)
+	posix.munmap(mem, uint(size))
+	pool := wl_proxy_marshal_flags(w.shm, 0, &wl_shm_pool_interface, 1, 0, rawptr(nil), i32(fd), i32(size))
+	w.drag_icon_buf = wl_proxy_marshal_flags(pool, 0, &wl_buffer_interface, 1, 0, rawptr(nil), i32(0), iw, ih, iw * 4, u32(0))
+	wl_proxy_marshal_flags(pool, 1, nil, 1, 0) // the buffer keeps the memory alive
+	w.drag_icon = wl_proxy_marshal_flags(w.compositor, 0, &wl_surface_interface, ver(w.compositor), 0, rawptr(nil))
+	if ver(w.drag_icon) >= 3 do wl_proxy_marshal_flags(w.drag_icon, 8, nil, ver(w.drag_icon), 0, i32(max(w.scale, 1))) // set_buffer_scale
+	w.drag_icon_shown = false // the drag starts over our window
+}
+
+@(private = "file")
+drop_drag_icon :: proc() {
+	if w.drag_icon != nil do wl_proxy_marshal_flags(w.drag_icon, 0, nil, ver(w.drag_icon), 1)
+	if w.drag_icon_buf != nil do wl_proxy_marshal_flags(w.drag_icon_buf, 0, nil, 1, 1)
+	w.drag_icon, w.drag_icon_buf, w.drag_icon_shown = nil, nil, false
 }
 
 // Publishes files to the system clipboard (copy or cut).

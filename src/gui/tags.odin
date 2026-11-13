@@ -156,6 +156,18 @@ toggle_tag :: proc(id: u8) {
 	else do refilter()
 }
 
+// Adds a tag to files dropped onto it in the sidebar.
+tag_paths :: proc(paths: []string, id: u8) {
+	for p in paths {
+		if p in file_tags do file_tags[p] |= 1 << id
+		else do file_tags[strings.clone(p)] = 1 << id
+	}
+	save_tags()
+	if t := tag_by_id(id); t != nil do toastf("%d 個にタグ「%s」を付けました", len(paths), t.name)
+	if is_tag_view() do reload()
+	else do refilter()
+}
+
 // Keeps tags attached when we rename or move something (whole subtrees included).
 tags_moved :: proc(old, new: string) {
 	moved := make([dynamic][2]string, context.temp_allocator)
@@ -269,6 +281,8 @@ draw_sidebar_tags :: proc(y: ^f32, w: f32) {
 		path := fmt.tprintf("tag:%d", t.id)
 		r := side_row(y, w, 0, t.name, app.cwd == path)
 		tag_dot(r.x + px(20), r.y + r.h / 2, px(7), t.color)
+		if b := bounce_of(path); b > 0 do rrect(r, px(6), with_alpha(ACCENT, u8(min(b * 900, 120))))
+		drop_hover(r, .Tag, path, t.name, px(6), t.id)
 		if clicked(r) do push(.Navigate, 0, strings.clone(path, context.temp_allocator))
 		if hovering(r) && app.pressed && app.button == 3 {
 			menu_tag_id = int(t.id)
