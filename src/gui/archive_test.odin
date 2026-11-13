@@ -166,3 +166,19 @@ test_lang_icon :: proc(t: ^testing.T) {
 	testing.expect(t, !ok)
 	testing.expect_value(t, kind_of("View.swift", {}), Kind.Code) // languages outside the old list count as code
 }
+
+@(test)
+test_project_detect :: proc(t: ^testing.T) {
+	testing.expect(t, toml_dep("[dependencies]\nyew = \"0.21\"", "yew"))
+	testing.expect(t, toml_dep("[dependencies.yew]\nversion = \"0.21\"", "yew"))
+	testing.expect(t, !toml_dep("[dependencies]\nyewtil = \"1\"", "yew")) // a longer crate name is not yew
+	dir := "/tmp/ame-fm-test-proj"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	_ = os.make_directory_all(dir)
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-proj/package.json", `{"dependencies":{"next":"15","react":"19"}}`)
+	l, ok := project_detect(dir)
+	testing.expect(t, ok && l.label == "Next.js") // Next wins over the React it depends on
+	l, ok = lang_of("vite.config.ts")
+	testing.expect(t, ok && l.label == "Vite")
+}

@@ -392,6 +392,7 @@ go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 		for k in app.expanded do delete(k)
 		clear(&app.expanded)
 		if !app.split do thumbs_clear() // keep memory to the folder on screen
+		projects_clear()
 		app.nav_t0 = now_s()
 		app.nav_dir = -1 if mode == .Back else 1
 		app.focus, app.anchor = -1, -1
@@ -1550,8 +1551,11 @@ draw_body :: proc() {
 			ix, iy := r.x + (r.w - is) / 2, r.y + px(8) - (is - px(64)) / 2
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
-			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)), tint_of(e.name))
-			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
+			if e.is_dir {
+				pi := place_icon_for(full_path(e.name))
+				folder_icon(ix, iy, is, pi, tint_of(e.name))
+				if pi == 0 do project_badge(ix, iy, is, full_path(e.name))
+			} else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
 			else do file_icon(ix, iy, is, e.kind, e.name)
 			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			if !e.is_dir do file_tag_dots(ix + px(6), iy + px(10), px(6), e.name) // folders show it as their own color
@@ -1569,8 +1573,9 @@ draw_body :: proc() {
 			ix, iy := r.x + px(16) - (is - px(28)) / 2, r.y + (r.h - is) / 2
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
-			if e.is_dir do folder_icon(ix, iy, is, 0, tint_of(e.name))
-			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
+			if e.is_dir {
+				folder_icon(ix, iy, is, 0, tint_of(e.name))
+			} else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
 			else do file_icon(ix, iy, is, e.kind, e.name)
 			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			if !e.is_dir do file_tag_dots(ix + px(2), iy + px(4), px(5), e.name)
@@ -1582,7 +1587,8 @@ draw_body :: proc() {
 			date_w, size_w := px(150), px(100)
 			name_w := r.w - px(60) - date_w - size_w - px(16)
 			nw := text(r.x + px(56), bl, ellipsize(filepath.base(e.name), size, name_w, false, true), size, col)
-			if strings.contains_rune(e.name, '/') && nw < name_w - px(40) { // search hit in a subfolder
+			if e.is_dir && nw < name_w - px(90) do project_chip(r.x + px(66) + nw, r.y + r.h / 2, full_path(e.name))
+			else if strings.contains_rune(e.name, '/') && nw < name_w - px(40) { // search hit in a subfolder
 				text(r.x + px(66) + nw, bl, ellipsize(filepath.dir(e.name), fs(12), name_w - nw - px(12), false, true), fs(12), with_alpha(FG, 110))
 			}
 			sz := "—" if e.is_dir else format_size(e.size)
