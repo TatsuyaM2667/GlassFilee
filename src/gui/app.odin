@@ -284,6 +284,7 @@ kind_of :: proc(name: string, mode: os.Permissions) -> Kind {
 		if ext == "" && .Execute_User in mode do return .Exec
 		return .Text
 	}
+	if _, _, ok := lang_icon(name); ok do return .Code // languages without a case above (Ruby, Swift, Haskell…)
 	return .Exec if .Execute_User in mode else .Generic
 }
 
@@ -1550,9 +1551,9 @@ draw_body :: proc() {
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
 			if e.is_dir do folder_icon(ix, iy, is, place_icon_for(full_path(e.name)), tint_of(e.name))
-			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
-			else do file_icon(ix, iy, is, e.kind)
+			else do file_icon(ix, iy, is, e.kind, e.name)
+			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			if !e.is_dir do file_tag_dots(ix + px(6), iy + px(10), px(6), e.name) // folders show it as their own color
 			git_dot(ix + is - px(4), iy + is - px(6), px(6), e.name)
 			if len(jobs) > 0 {if f := converting(e.name); f >= 0 do progress_ring({ix, iy, is, is}, f)}
@@ -1569,9 +1570,9 @@ draw_body :: proc() {
 			th: ^Thumb
 			if !e.is_dir && (e.kind == .Image || e.kind == .Video || e.kind == .Audio) do th = thumb_get(full_path(e.name), e.mtime, e.kind)
 			if e.is_dir do folder_icon(ix, iy, is, 0, tint_of(e.name))
-			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			else if th != nil do draw_thumb(ix, iy, is, th, e.kind)
-			else do file_icon(ix, iy, is, e.kind)
+			else do file_icon(ix, iy, is, e.kind, e.name)
+			if spring > 0 do progress_ring({ix, iy, is, is}, spring, false)
 			if !e.is_dir do file_tag_dots(ix + px(2), iy + px(4), px(5), e.name)
 			git_dot(ix + is, iy + is - px(2), px(5), e.name)
 			if is_now_playing(e.name) do eq_badge(ix + is - px(8), iy + is - px(12), px(12))

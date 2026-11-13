@@ -101,7 +101,7 @@ draw_props :: proc(W, H: f32) {
 	multi := len(props.names) > 1
 	is := px(64)
 	if info.type == .Directory && !multi do folder_icon(r.x + px(24), r.y + px(24), is, 0, tint_of_mask(file_tags[first]))
-	else do file_icon(r.x + px(24), r.y + px(24), is, kind_of(first, info.mode))
+	else do file_icon(r.x + px(24), r.y + px(24), is, kind_of(first, info.mode), first)
 	title := fmt.tprintf("%d 個のアイテム", len(props.names)) if multi else filepath.base(first)
 	text(r.x + px(104), r.y + px(52), ellipsize(title, fs(16), r.w - px(128), true), fs(16), FG, true)
 	done := sync.atomic_load(&props.done)

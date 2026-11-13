@@ -155,3 +155,14 @@ test_drop_into_self :: proc(t: ^testing.T) {
 	testing.expect(t, dir_ok("/home/u/写真2")) // only a real subfolder counts
 	testing.expect(t, dir_ok("/home/u"))
 }
+
+@(test)
+test_lang_icon :: proc(t: ^testing.T) {
+	g, _, ok := lang_icon("/x/Main.PY")
+	testing.expect(t, ok && g == 0xf0320) // case-insensitive extension
+	_, _, ok = lang_icon("Dockerfile")
+	testing.expect(t, ok) // known name without extension
+	_, _, ok = lang_icon("photo.png")
+	testing.expect(t, !ok)
+	testing.expect_value(t, kind_of("View.swift", {}), Kind.Code) // languages outside the old list count as code
+}

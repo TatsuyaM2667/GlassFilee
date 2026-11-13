@@ -115,8 +115,8 @@ draw_ghost :: proc(x, y, sc: f32) {
 			folder_icon(ix, iy, is, 0, it.tint)
 		} else if it.kind == .Image || it.kind == .Video || it.kind == .Audio {
 			if th := thumb_get(it.path, it.mtime, it.kind); th != nil do draw_thumb(ix, iy, is, th, it.kind)
-			else do file_icon(ix, iy, is, it.kind)
-		} else do file_icon(ix, iy, is, it.kind)
+			else do file_icon(ix, iy, is, it.kind, it.path)
+		} else do file_icon(ix, iy, is, it.kind, it.path)
 	}
 	if len(dd.paths) > 1 {
 		label := fmt.tprintf("%d", len(dd.paths))

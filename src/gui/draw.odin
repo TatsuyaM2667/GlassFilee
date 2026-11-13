@@ -225,15 +225,23 @@ KIND_GLYPH := [Kind]rune {
 	.Exec     = 0xf120, // fa-terminal
 }
 
-file_icon :: proc(x, y, s: f32, kind: Kind) {
+// name (optional) picks a programming-language logo by extension / file name.
+file_icon :: proc(x, y, s: f32, kind: Kind, name := "") {
 	page := Rect{x + 0.18 * s, y + 0.06 * s, 0.64 * s, 0.86 * s}
 	rrect(page, 0.06 * s, hex(0xf6f5f4, 240))
 	rrect({page.x + page.w - 0.2 * s, page.y, 0.2 * s, 0.2 * s}, 0.04 * s, hex(0xc0bfbc))
 	band := Rect{page.x, page.y + page.h * 0.52, page.w, page.h * 0.3}
-	if s >= 32 {
-		glyph_center(band, KIND_GLYPH[kind], i32(0.26 * s), hex(KIND_COLOR[kind]))
+	glyph, color := KIND_GLYPH[kind], KIND_COLOR[kind]
+	lang := false
+	if name != "" do glyph, color, lang = lang_icon(name)
+	if !lang do glyph, color = KIND_GLYPH[kind], KIND_COLOR[kind]
+	if lang {
+		// small (list rows) gets a bigger share of the page so the logo stays readable
+		glyph_center({page.x, page.y + page.h * 0.25, page.w, page.h * 0.65}, glyph, i32((0.36 if s >= 32 else 0.48) * s), hex(color))
+	} else if s >= 32 {
+		glyph_center(band, glyph, i32(0.26 * s), hex(color))
 	} else {
-		rrect(shrink(band, 0.08 * s), 0.03 * s, hex(KIND_COLOR[kind]))
+		rrect(shrink(band, 0.08 * s), 0.03 * s, hex(color))
 	}
 }
 
