@@ -24,8 +24,12 @@ so it idles at **0% CPU and ~19 MB of RAM**.
 - **Trash** (freedesktop spec, shared with GNOME): move, restore, empty.
 - **Clipboard shared with other apps** (GNOME / KDE / browsers).
 - **Thumbnails** for photos and videos (ffmpeg, shared GNOME cache, only what is on screen).
-- **Split view** (F3, Tab switches panes) and **drag & drop** — between panes, onto folders,
-  to and from other apps.
+- **Split view** (F3, Tab switches panes).
+- **Drag & drop you can see**: the dragged items lift into a stack of cards with a count badge that
+  springs after the pointer; folders, sidebar places, drives, Trash and tags light up as drop targets;
+  a label tells what will happen (move / copy / trash / tag — Ctrl copies, Shift moves); hovering a
+  folder or tab for a moment opens it; the list scrolls at the edges; on drop the cards fly into the
+  target. Works between panes and with other apps.
 - **Background copy/move** with a progress panel and cancel; **undo** (Ctrl+Z, or the toast's
   元に戻す button) for trash, rename, move, copy and new folder.
 - **Auto-refresh**: changes made by other programs appear immediately (inotify / kqueue).
@@ -33,9 +37,22 @@ so it idles at **0% CPU and ~19 MB of RAM**.
   and every file that arrives is converted.
 - **Donut back face**: press Tab (or scroll) on the convert donut for rotate, mirror, grayscale,
   shrink, square crop, remove audio, normalize volume, zip… The ring shows real ffmpeg progress.
-- **Music player**: a folder of songs gets a player bar with cover art, seek bar and equalizer.
-- **Bookmarks** (shared with GNOME), **USB drives** (mount via udisks2 / eject), **color tags**
-  with a sidebar filter, **Git status** dots, **properties** (Ctrl+I), **batch rename** (F2 on
+- **Music player**: click a song and it plays at once in an Apple Music–style bar; the queue includes
+  subfolders (right-click a folder → 音楽を再生). The full-screen Now Playing view shows synced lyrics
+  from a same-name `.lrc` and plays a same-name `.mp4` as the music video. Songs with embedded cover
+  art show it as their icon.
+- **Viewer for every file**: images (zoom / pan), PDF (pages), video, SVG, text and code, Office /
+  EPUB text, archive listings, font samples, and a hex dump for everything else.
+- **Sorting & grouping**: 8 keys (name, modified, created, accessed, size, type, extension, tag),
+  ascending / descending, folders first, and groups with headers (type, date, size, extension, tag,
+  first letter). Each folder remembers its own order.
+- **Language & framework icons**: source files show their language logo (Python, Rust, TypeScript,
+  Go, …), and project folders get a badge for the framework found in their manifest — React,
+  Next.js, Vue, Svelte, Angular, Yew, Leptos, Tauri, Django, Flutter, Rails, Laravel and more.
+- **Tags like iPad**: create named tags with colors; a tagged folder takes the tag's color.
+- **Tree view** (Ctrl+3), Obsidian-style, as an alternative to icons and list.
+- **Copy Path** (right-click, or Shift+Ctrl+C) and copy / paste of text in the path bar.
+- **Bookmarks** (shared with GNOME), **USB drives** (mount via udisks2 / eject), **Git status** dots, **properties** (Ctrl+I), **batch rename** (F2 on
   several items: `*` = old name, `##` = number).
 - **Radial right-click menus** with the same swirl-in animation as the convert donut; tag colors
   sit on an arc under the ring.
@@ -51,11 +68,11 @@ cd ame-Filemanager
 NO_DEFAULT=1 ./install.sh   # keep your current default file manager
 ```
 
-| System | Steps |
-| --- | --- |
+| System        | Steps                                                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Chimera Linux | install Odin from odin-lang.org, then `apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs ffmpeg` → `./install.sh` |
-| Arch Linux | `cd packaging/arch && makepkg -si` |
-| FreeBSD | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg` → `./install.sh` |
+| Arch Linux    | `cd packaging/arch && makepkg -si`                                                                                                       |
+| FreeBSD       | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg` → `./install.sh`                                           |
 
 Requirements: a Wayland compositor with xdg-shell, a recent Odin (dev-2026-08 or newer),
 libwayland, libxkbcommon, FreeType, bsdtar. Fonts: Adwaita Sans, Noto Sans CJK, Symbols Nerd Font
@@ -65,31 +82,33 @@ Background opacity: `GF_OPACITY=0.85 ame-filemanager` (default 0.7).
 
 ## Keys
 
-| Key | Action |
-| --- | --- |
-| Enter / double-click | Open |
-| Space | Quick preview |
-| Ctrl+drag / Ctrl+E | Convert (donut menu) |
-| Alt+← / Alt+→ / Alt+↑ | Back / Forward / Parent |
-| Ctrl+L / Ctrl+F | Type a path / Search (or just start typing) |
-| Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste |
-| F2 | Rename |
-| Delete / Shift+Delete | Move to trash / Delete permanently |
-| Ctrl+Shift+N | New folder |
-| Ctrl+T / Ctrl+W / Ctrl+Tab | New / close / next tab |
-| F3 / Tab | Split view / switch pane |
-| Ctrl+Z | Undo |
-| Ctrl+D / Ctrl+I | Bookmark / Properties |
-| Ctrl+1 / Ctrl+2 | List / Icon view |
-| Ctrl+H | Show hidden files |
-| Ctrl+A, F5, Ctrl+Q | Select all, Reload, Quit |
+| Key                        | Action                                      |
+| -------------------------- | ------------------------------------------- |
+| Enter / double-click       | Open                                        |
+| Space                      | Quick preview                               |
+| Ctrl+drag / Ctrl+E         | Convert (donut menu)                        |
+| Alt+← / Alt+→ / Alt+↑      | Back / Forward / Parent                     |
+| Ctrl+L / Ctrl+F            | Type a path / Search (or just start typing) |
+| Ctrl+C / Ctrl+X / Ctrl+V   | Copy / Cut / Paste                          |
+| F2                         | Rename                                      |
+| Delete / Shift+Delete      | Move to trash / Delete permanently          |
+| Ctrl+Shift+N               | New folder                                  |
+| Ctrl+T / Ctrl+W / Ctrl+Tab | New / close / next tab                      |
+| F3 / Tab                   | Split view / switch pane                    |
+| Ctrl+Z                     | Undo                                        |
+| Ctrl+D / Ctrl+I            | Bookmark / Properties                       |
+| Ctrl+1 / Ctrl+2 / Ctrl+3   | List / Icon / Tree view                     |
+| Shift+Ctrl+C               | Copy path                                   |
+| Ctrl+H                     | Show hidden files                           |
+| Ctrl+A, F5, Ctrl+Q         | Select all, Reload, Quit                    |
 
 ## Layout
 
 ```
 src/core/    Odin core: file operations, trash (also built as a C-ABI library for the CLI)
 src/gui/     Odin GUI: Wayland client (wl.odin), renderer (draw.odin), fonts (font.odin),
-             app (app.odin), conversion (convert.odin), preview, archives
+             app (app.odin), conversion (convert.odin), preview / viewer, archives,
+             music, sorting (sorting.odin), drag & drop (dnd.odin), icons (lang.odin)
 src/cli/     gf-cli, a small Zig 0.13 command-line tool on top of the core (optional)
 tests/       Odin trash tests; ./test.sh runs everything
 ```

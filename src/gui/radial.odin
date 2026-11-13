@@ -239,21 +239,44 @@ draw_menu :: proc() {
 
 // Two-line label for a narrow slice: split near the middle, preferably after a
 // particle (を へ の に で と), so "パスをコピー" becomes "パスを / コピー".
+// Where to break a label in two (index of the first rune of the second line).
+label_cut :: proc(runes: []rune) -> int {
+	n := len(runes)
+	mid := (n + 1) / 2
+	cut := mid
+	best := 99
+	// cost of breaking before rune i: after a particle is best, then where the script changes
+	// (フォルダー|優先); never before ー, small kana or closing punctuation
+	script :: proc(r: rune) -> int {
+		switch r {
+		case 0x30a0 ..= 0x30ff: return 1 // katakana (and ー)
+		case 0x3040 ..= 0x309f: return 2 // hiragana
+		case 0x4e00 ..= 0x9fff: return 3 // kanji
+		}
+		return 0
+	}
+	for i in max(1, mid - 3) ..= min(n - 1, mid + 3) {
+		switch runes[i] {
+		case 'ー', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ', 'ャ', 'ュ', 'ョ', '、', '。', '）', '」', '…':
+			continue
+		}
+		cost := abs(i - mid) + 10
+		switch runes[i - 1] {
+		case 'を', 'へ', 'の', 'に', 'で', 'と', ' ': cost = abs(i - mid)
+		case: if script(runes[i - 1]) != script(runes[i]) do cost = abs(i - mid) + 4
+		}
+		if cost < best {best = cost; cut = i}
+	}
+	return cut
+}
+
 @(private = "file")
 split_label :: proc(label: string, size: i32, maxw: f32) -> (string, string) {
 	if f32(text_width(label, size)) <= maxw do return label, ""
 	runes := utf8.string_to_runes(label, context.temp_allocator)
 	n := len(runes)
 	if n < 2 do return ellipsize(label, size, maxw), ""
-	mid := (n + 1) / 2
-	cut := mid
-	best := 99
-	for i in max(1, mid - 2) ..= min(n - 1, mid + 2) {
-		switch runes[i - 1] {
-		case 'を', 'へ', 'の', 'に', 'で', 'と', ' ':
-			if abs(i - mid) < best {best = abs(i - mid); cut = i}
-		}
-	}
+	cut := label_cut(runes)
 	a := utf8.runes_to_string(runes[:cut], context.temp_allocator)
 	b := utf8.runes_to_string(runes[cut:], context.temp_allocator)
 	return ellipsize(strings.trim_space(a), size, maxw), ellipsize(strings.trim_space(b), size, maxw)

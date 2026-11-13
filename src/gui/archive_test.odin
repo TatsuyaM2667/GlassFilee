@@ -4,6 +4,7 @@ import "core:os"
 import "core:sys/posix"
 import "core:strings"
 import "core:testing"
+import "core:unicode/utf8"
 
 @(test)
 archive_kind_test :: proc(t: ^testing.T) {
@@ -181,4 +182,12 @@ test_project_detect :: proc(t: ^testing.T) {
 	testing.expect(t, ok && l.label == "Next.js") // Next wins over the React it depends on
 	l, ok = lang_of("vite.config.ts")
 	testing.expect(t, ok && l.label == "Vite")
+}
+
+@(test)
+test_split_label :: proc(t: ^testing.T) {
+	r := utf8.string_to_runes("フォルダー優先", context.temp_allocator)
+	testing.expect_value(t, label_cut(r), 5) // フォルダー|優先: at the script change, not before ー
+	r = utf8.string_to_runes("ここに展開", context.temp_allocator)
+	testing.expect_value(t, label_cut(r), 3) // after the particle に
 }
