@@ -493,6 +493,7 @@ on_keyboard :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]
 		append(&events, Ev{kind = .Focus})
 	case 2: // leave
 		w.repeat_key = 0
+		append(&events, Ev{kind = .Focus, button = 1}) // button 1 = focus lost
 	case 3: // key
 		w.serial = a[0].u
 		code := a[2].u

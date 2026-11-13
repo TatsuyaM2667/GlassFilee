@@ -2015,7 +2015,7 @@ on_event :: proc(ev: Ev) -> bool {
 			e.pre = ev.text
 		} else do delete(ev.text)
 	case .Focus:
-		refresh_devices() // drives may have been plugged in meanwhile
+		if ev.button == 0 do refresh_devices() // drives may have been plugged in meanwhile
 	case .Dnd_Motion:
 		app.dnd_on, app.dnd_x, app.dnd_y = true, ev.x * app.S, ev.y * app.S
 		dd.mods = ev.mods
@@ -2153,6 +2153,7 @@ main :: proc() {
 			dirty = true
 		}
 		if rules_tick() do dirty = true
+		if project_tick() do dirty = true
 		if git_poll() do dirty = true
 		if music_poll() do dirty = true
 		if app.walking {
@@ -2193,7 +2194,7 @@ main :: proc() {
 		// and seek bar (4 fps) — lyrics scrolling and video drive their own frames
 		tick := 250 if mu.full else 80
 		if music_playing() && !mu.paused && (timeout < 0 || timeout > tick) do timeout = tick
-		for deadline in ([]i64{refresh_at, other_refresh_at, rules_deadline()}) {
+		for deadline in ([]i64{refresh_at, other_refresh_at, rules_deadline(), project_deadline()}) {
 			if deadline == 0 do continue
 			d := int(max(deadline - ticks_ms(), 0))
 			timeout = d if timeout < 0 else min(timeout, d)
@@ -2202,6 +2203,7 @@ main :: proc() {
 		append(&dirs, app.cwd)
 		if app.split do append(&dirs, app.other.cwd)
 		for r in rules do append(&dirs, r.dir)
+		project_watch_dirs(&dirs) // project badges follow edits, downloads and new files live
 		watch_set(dirs[:])
 		if len(jobs) > 0 do update_progress()
 		alive, redraw, timed_out := plat_wait(timeout, watch_fds())
@@ -2214,6 +2216,7 @@ main :: proc() {
 			if d == app.cwd do refresh_at = ticks_ms() + 150
 			if app.split && d == app.other.cwd do other_refresh_at = ticks_ms() + 150
 			rule_dir_changed(d)
+			project_changed(d)
 		}
 		if (reap_jobs() || reap_ops()) && app.dialog == .None do reload()
 		// timeout = toast expired or retrying a busy buffer

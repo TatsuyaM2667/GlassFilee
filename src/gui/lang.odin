@@ -206,12 +206,78 @@ draw_lang :: proc(r: Rect, l: Lang, size: f32) {
 // ---------------------------------------------------------------------------
 // Project folders: what framework / language a folder is, from its manifest files
 
-@(private = "file") projects: map[string]Lang // cleared when leaving the folder
-@(private = "file") no_project := Lang{}
+// Detected projects, kept live: the folders each detection looked at are watched while
+// the project is on screen, and a change anywhere in them re-detects it shortly after.
+@(private = "file")
+Project :: struct {
+	lang: Lang,
+	ok:   bool,
+	dirs: [dynamic]string, // root + the subfolders main_language walked
+	seen: u64, // frame it was last drawn in
+}
+@(private = "file") projects: map[string]Project // cleared when leaving the folder
+@(private = "file") stale: map[string]i64 // project root → when to re-detect (debounce)
+
+PROJECT_WATCH_MAX :: 400 // inotify watches / kqueue fds spent on visible projects
+
+@(private = "file")
+project_free :: proc(root: string) {
+	if p, ok := projects[root]; ok {
+		for d in p.dirs do delete(d)
+		delete(p.dirs)
+		k, _ := delete_key(&projects, root)
+		delete(k)
+	}
+	if root in stale {
+		k, _ := delete_key(&stale, root)
+		delete(k)
+	}
+}
 
 projects_clear :: proc() {
-	for k in projects do delete(k)
-	clear(&projects)
+	roots := make([dynamic]string, context.temp_allocator)
+	for k in projects do append(&roots, strings.clone(k, context.temp_allocator))
+	for k in roots do project_free(k)
+	for k in stale do delete(k)
+	clear(&stale)
+}
+
+// Folders to watch: those of the projects drawn in the last frame.
+project_watch_dirs :: proc(out: ^[dynamic]string) {
+	n := 0
+	for _, p in projects {
+		if p.seen != frame_no do continue
+		for d in p.dirs {
+			if n >= PROJECT_WATCH_MAX do return
+			append(out, d)
+			n += 1
+		}
+	}
+}
+
+// A watched folder changed: re-detect the project(s) containing it in 0.4 s.
+project_changed :: proc(dir: string) {
+	for root, p in projects {
+		for d in p.dirs do if d == dir {
+			if root not_in stale do stale[strings.clone(root)] = ticks_ms() + 400
+			break
+		}
+	}
+}
+
+// Re-detects projects whose debounce ran out; true if a redraw is needed.
+project_tick :: proc() -> bool {
+	now := ticks_ms()
+	due := make([dynamic]string, context.temp_allocator)
+	for root, t in stale do if now >= t do append(&due, strings.clone(root, context.temp_allocator))
+	for root in due do project_free(root) // the next draw detects it again
+	return len(due) > 0
+}
+
+project_deadline :: proc() -> i64 {
+	d: i64
+	for _, t in stale do if d == 0 || t < d do d = t
+	return d
 }
 
 @(private = "file")
@@ -244,7 +310,7 @@ toml_dep :: proc(toml, dep: string) -> bool {
 // A framework found in the manifest wins (React, Yew, Django…); otherwise the language
 // with the most source code (by bytes) — so a mostly-Odin repo with a small build.zig
 // is Odin, not Zig. Folders with no manifest, build file or .git get no badge.
-project_detect :: proc(dir: string) -> (Lang, bool) {
+project_detect :: proc(dir: string, dirs: ^[dynamic]string = nil) -> (Lang, bool) {
 	marker: Lang // language a manifest implies, used when no source files are found
 	if pkg, ok := read_small(dir, "package.json"); ok {
 		has :: proc(pkg, dep: string) -> bool {return strings.contains(pkg, strings.concatenate({"\"", dep}, context.temp_allocator))}
@@ -317,7 +383,7 @@ project_detect :: proc(dir: string) -> (Lang, bool) {
 		for f in ([]string{".git", "Makefile", "CMakeLists.txt", "meson.build", "build.sh", "flake.nix"}) do if exists_in(dir, f) do is_project = true
 	}
 	if !is_project do return {}, false
-	if l, ok := main_language(dir); ok do return l, true
+	if l, ok := main_language(dir, dirs); ok do return l, true
 	return marker, marker.icon != ""
 }
 
@@ -339,10 +405,10 @@ LANGUAGE_NAMES := map[string]string {
 SKIP_DIRS :: []string {"node_modules", "target", "zig-cache", "zig-out", "build", "dist", "out", "vendor", "third_party", "venv", "__pycache__", "Pods", "bin", "obj"}
 
 // The language with the most bytes of source, looking up to 3 levels deep (at most ~4000 entries).
-main_language :: proc(dir: string) -> (Lang, bool) {
+main_language :: proc(dir: string, dirs: ^[dynamic]string = nil) -> (Lang, bool) {
 	bytes := make(map[string]i64, 16, context.temp_allocator)
 	budget := 4000
-	walk :: proc(dir: string, depth: int, bytes: ^map[string]i64, budget: ^int) {
+	walk :: proc(dir: string, depth: int, bytes: ^map[string]i64, budget: ^int, dirs: ^[dynamic]string) {
 		infos, err := os.read_all_directory_by_path(dir, context.temp_allocator)
 		if err != nil do return
 		for fi in infos {
@@ -350,14 +416,17 @@ main_language :: proc(dir: string) -> (Lang, bool) {
 			budget^ -= 1
 			if strings.has_prefix(fi.name, ".") do continue
 			if fi.type == .Directory {
-				if depth < 3 && !slice.contains(SKIP_DIRS, fi.name) do walk(fi.fullpath, depth + 1, bytes, budget)
+				if depth < 3 && !slice.contains(SKIP_DIRS, fi.name) {
+					if dirs != nil && len(dirs) < 64 do append(dirs, strings.clone(fi.fullpath))
+					walk(fi.fullpath, depth + 1, bytes, budget, dirs)
+				}
 				continue
 			}
 			ext := strings.to_lower(filepath.ext(fi.name), context.temp_allocator)
 			if icon, ok := LANG_BY_EXT[ext]; ok && icon in LANGUAGE_NAMES do bytes[icon] += max(fi.size, 1)
 		}
 	}
-	walk(dir, 0, &bytes, &budget)
+	walk(dir, 0, &bytes, &budget, dirs)
 	best, most := "", i64(0)
 	for icon, n in bytes do if n > most || n == most && icon < best {best, most = icon, n}
 	if best == "" do return {}, false
@@ -366,10 +435,15 @@ main_language :: proc(dir: string) -> (Lang, bool) {
 
 // Cached per folder; only folders actually drawn are looked at.
 project_of :: proc(dir: string) -> (Lang, bool) {
-	if l, ok := projects[dir]; ok do return l, l != no_project
-	l, ok := project_detect(dir)
-	projects[strings.clone(dir)] = l if ok else no_project
-	return l, ok
+	if p, ok := &projects[dir]; ok {
+		p.seen = frame_no
+		return p.lang, p.ok
+	}
+	p := Project{seen = frame_no}
+	append(&p.dirs, strings.clone(dir))
+	p.lang, p.ok = project_detect(dir, &p.dirs)
+	projects[strings.clone(dir)] = p
+	return p.lang, p.ok
 }
 
 // White badge with the project's logo in the folder's lower right corner.

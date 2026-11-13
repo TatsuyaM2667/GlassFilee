@@ -4,6 +4,7 @@ import "core:os"
 import "core:sys/posix"
 import "core:strings"
 import "core:testing"
+import "core:time"
 import "core:unicode/utf8"
 
 @(test)
@@ -226,4 +227,31 @@ test_project_main_language :: proc(t: ^testing.T) {
 	_ = os.remove_all("/tmp/ame-fm-test-lang/src")
 	l, ok = project_detect(dir)
 	testing.expect(t, ok && l.label == "Zig") // no sources: the build file still says Zig
+}
+
+@(test)
+test_project_live_update :: proc(t: ^testing.T) {
+	dir := "/tmp/ame-fm-test-live"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	defer projects_clear()
+	_ = os.make_directory_all("/tmp/ame-fm-test-live/src")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-live/build.zig", "const std = @import(\"std\");")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-live/src/main.zig", "pub fn main() void {}")
+	l, ok := project_of(dir)
+	testing.expect(t, ok && l.label == "Zig")
+	// later: lots of Odin arrives in src/ (a download, new files, edits)
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-live/src/app.odin", strings.repeat("x := 1\n", 300, context.temp_allocator))
+	dirs := make([dynamic]string, context.temp_allocator)
+	frame_no = 0
+	project_watch_dirs(&dirs)
+	watched_src := false
+	for d in dirs do if d == "/tmp/ame-fm-test-live/src" do watched_src = true
+	testing.expect(t, watched_src) // subfolders of a visible project are watched
+	project_changed("/tmp/ame-fm-test-live/src") // what the watcher reports
+	testing.expect(t, !project_tick()) // debounced: not yet
+	time.sleep(450 * time.Millisecond)
+	testing.expect(t, project_tick())
+	l, ok = project_of(dir)
+	testing.expect(t, ok && l.label == "Odin")
 }
