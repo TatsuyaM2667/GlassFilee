@@ -159,11 +159,11 @@ test_drop_into_self :: proc(t: ^testing.T) {
 
 @(test)
 test_lang_icon :: proc(t: ^testing.T) {
-	g, _, ok := lang_icon("/x/Main.PY")
-	testing.expect(t, ok && g == 0xf0320) // case-insensitive extension
-	_, _, ok = lang_icon("Dockerfile")
+	l, ok := lang_of("/x/Main.PY")
+	testing.expect(t, ok && l.icon == "python") // case-insensitive extension
+	_, ok = lang_of("Dockerfile")
 	testing.expect(t, ok) // known name without extension
-	_, _, ok = lang_icon("photo.png")
+	_, ok = lang_of("photo.png")
 	testing.expect(t, !ok)
 	testing.expect_value(t, kind_of("View.swift", {}), Kind.Code) // languages outside the old list count as code
 }
@@ -190,4 +190,23 @@ test_split_label :: proc(t: ^testing.T) {
 	testing.expect_value(t, label_cut(r), 5) // フォルダー|優先: at the script change, not before ー
 	r = utf8.string_to_runes("ここに展開", context.temp_allocator)
 	testing.expect_value(t, label_cut(r), 3) // after the particle に
+}
+
+@(test)
+test_svg_rasterize :: proc(t: ^testing.T) {
+	img := svg_rasterize(`<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#ff0000"/></svg>`, 10, context.temp_allocator)
+	testing.expect_value(t, img[0], u32(0xffff0000))
+	testing.expect_value(t, img[99], u32(0xffff0000))
+	// even-odd: a square with a square hole
+	img = svg_rasterize(`<svg viewBox="0 0 10 10"><path fill-rule="evenodd" fill="#fff" d="M0 0h10v10H0zM3 3h4v4H3z"/></svg>`, 10, context.temp_allocator)
+	testing.expect_value(t, img[0], u32(0xffffffff))
+	testing.expect_value(t, img[5 * 10 + 5] >> 24, u32(0)) // hole
+	// circle (arcs): covered area ≈ πr²
+	img = svg_rasterize(`<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#000"/></svg>`, 40, context.temp_allocator)
+	area: f32
+	for p in img do area += f32(p >> 24) / 255
+	testing.expect(t, abs(area - 3.14159 * 16 * 16) < 12)
+	// gradients take the average of their stops; relative commands, compact numbers
+	img = svg_rasterize(`<svg viewBox="0 0 4 4"><defs><linearGradient id="g"><stop stop-color="#000"/><stop stop-color="#fefefe"/></linearGradient></defs><path fill="url(#g)" d="m0 0h4v4h-4z"/></svg>`, 4, context.temp_allocator)
+	testing.expect_value(t, img[5], u32(0xff7f7f7f))
 }

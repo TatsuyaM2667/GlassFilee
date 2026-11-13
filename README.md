@@ -47,8 +47,10 @@ so it idles at **0% CPU and ~19 MB of RAM**.
   ascending / descending, folders first, and groups with headers (type, date, size, extension, tag,
   first letter). Each folder remembers its own order.
 - **Language & framework icons**: source files show their language logo (Python, Rust, TypeScript,
-  Go, …), and project folders get a badge for the framework found in their manifest — React,
-  Next.js, Vue, Svelte, Angular, Yew, Leptos, Tauri, Django, Flutter, Rails, Laravel and more.
+  Go, Odin, …) and PDFs the Acrobat logo; project folders get a badge for the framework found in
+  their manifest — React, Next.js, Vue, Svelte, Angular, Yew, Leptos, Dioxus, Tauri, Django,
+  Flutter, Rails, Laravel and more. About 80 real logos (mostly [Simple Icons](https://simpleicons.org),
+  see `assets/icons/SOURCES.md`) are compiled in and drawn by a small SVG rasterizer written in Odin.
 - **Tags like iPad**: create named tags with colors; a tagged folder takes the tag's color.
 - **Tree view** (Ctrl+3), Obsidian-style, as an alternative to icons and list.
 - **Copy Path** (right-click, or Shift+Ctrl+C) and copy / paste of text in the path bar.

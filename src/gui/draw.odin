@@ -234,7 +234,7 @@ file_icon :: proc(x, y, s: f32, kind: Kind, name := "") {
 	if name != "" {
 		if l, ok := lang_of(name); ok {
 			// small (list rows) gets a bigger share of the page so the logo stays readable
-			draw_lang({page.x, page.y + page.h * 0.25, page.w, page.h * 0.65}, l, (0.36 if s >= 32 else 0.48) * s)
+			draw_lang({page.x, page.y + page.h * 0.25, page.w, page.h * 0.65}, l, (0.42 if s >= 32 else 0.5) * s)
 			return
 		}
 	}

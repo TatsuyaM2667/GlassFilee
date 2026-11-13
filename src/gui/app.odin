@@ -284,7 +284,7 @@ kind_of :: proc(name: string, mode: os.Permissions) -> Kind {
 		if ext == "" && .Execute_User in mode do return .Exec
 		return .Text
 	}
-	if _, _, ok := lang_icon(name); ok do return .Code // languages without a case above (Ruby, Swift, Haskell…)
+	if _, ok := lang_of(name); ok do return .Code // languages without a case above (Ruby, Swift, Haskell…)
 	return .Exec if .Execute_User in mode else .Generic
 }
 

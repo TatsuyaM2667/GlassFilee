@@ -43,9 +43,11 @@
 - **並べ替えとグループ**: 名前・更新日時・作成日時・アクセス日時・サイズ・種類・拡張子・タグの 8 通り、
   昇順／降順、フォルダー優先、見出し付きのグループ（種類・日付・サイズ・拡張子・タグ・頭文字）。
   並べ方はフォルダーごとに記憶します。
-- **言語・フレームワークのアイコン**: ソースファイルには言語のロゴ（Python・Rust・TypeScript・Go など）、
-  プロジェクトのフォルダーには package.json や Cargo.toml から判定したフレームワークのバッジ
-  （React・Next.js・Vue・Svelte・Angular・Yew・Leptos・Tauri・Django・Flutter・Rails・Laravel など）。
+- **言語・フレームワークのアイコン**: ソースファイルには言語のロゴ（Python・Rust・TypeScript・Go・Odin など）、
+  PDF には Acrobat のロゴ、プロジェクトのフォルダーには package.json や Cargo.toml から判定したフレームワークのバッジ
+  （React・Next.js・Vue・Svelte・Angular・Yew・Leptos・Dioxus・Tauri・Django・Flutter・Rails・Laravel など）。
+  本物のロゴ約 80 個（主に [Simple Icons](https://simpleicons.org)、出典は `assets/icons/SOURCES.md`）を
+  アプリに埋め込み、Odin で書いた小さな SVG 描画エンジンで描いています。
 - **iPad のようなタグ**: 名前と色を自由に作れます。タグを付けたフォルダーはその色になります。
 - **ツリー表示**（Ctrl+3）: Obsidian 風。アイコン表示・一覧表示と切り替え。
 - **パスをコピー**（右クリック、または Shift+Ctrl+C）。パスバーの文字もコピー＆ペーストできます。
