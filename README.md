@@ -54,6 +54,12 @@ so it idles at **0% CPU and ~19 MB of RAM**.
 - **Tags like iPad**: create named tags with colors; a tagged folder takes the tag's color.
 - **Tree view** (Ctrl+3), Obsidian-style, as an alternative to icons and list.
 - **Copy Path** (right-click, or Shift+Ctrl+C) and copy / paste of text in the path bar.
+- **Handy extras from other file managers**: new empty file, select by pattern (Ctrl+S, e.g.
+  `*.jpg *.png`), paste a copied image or text as a new file, Tab completion in the path bar,
+  item counts for folders in list view, free space of the current drive in the sidebar, mouse
+  back / forward buttons, and your tabs reopen at the next start.
+- **Live project badges**: adding, downloading or editing files inside a project updates its
+  language / framework badge within half a second.
 - **Bookmarks** (shared with GNOME), **USB drives** (mount via udisks2 / eject), **Git status** dots, **properties** (Ctrl+I), **batch rename** (F2 on
   several items: `*` = old name, `##` = number).
 - **Radial right-click menus** with the same swirl-in animation as the convert donut; tag colors
@@ -101,6 +107,8 @@ Background opacity: `GF_OPACITY=0.85 ame-filemanager` (default 0.7).
 | Ctrl+D / Ctrl+I            | Bookmark / Properties                       |
 | Ctrl+1 / Ctrl+2 / Ctrl+3   | List / Icon / Tree view                     |
 | Shift+Ctrl+C               | Copy path                                   |
+| Ctrl+S                     | Select by pattern                           |
+| Tab (in the path bar)      | Complete the folder name                    |
 | Ctrl+H                     | Show hidden files                           |
 | Ctrl+A, F5, Ctrl+Q         | Select all, Reload, Quit                    |
 

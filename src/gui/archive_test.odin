@@ -255,3 +255,66 @@ test_project_live_update :: proc(t: ^testing.T) {
 	l, ok = project_of(dir)
 	testing.expect(t, ok && l.label == "Odin")
 }
+
+@(test)
+test_new_features :: proc(t: ^testing.T) {
+	// select by pattern
+	testing.expect(t, pattern_matches("*.jpg *.png", "Photo.JPG"))
+	testing.expect(t, pattern_matches("*.jpg,*.png", "dir/a.png"))
+	testing.expect(t, !pattern_matches("*.jpg", "a.jpeg"))
+
+	root := "/tmp/ame-fm-test-feat"
+	_ = os.remove_all(root)
+	defer _ = os.remove_all(root)
+	_ = os.make_directory_all("/tmp/ame-fm-test-feat/box/Documents")
+	_ = os.make_directory_all("/tmp/ame-fm-test-feat/box/Downloads")
+	_ = os.make_directory_all("/tmp/ame-fm-test-feat/box/Music")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-feat/box/.hidden", "x")
+
+	// item counts (hidden ones only when shown)
+	saved_hidden := app.show_hidden
+	defer app.show_hidden = saved_hidden
+	app.show_hidden = false
+	dir_counts_clear()
+	testing.expect_value(t, dir_count("/tmp/ame-fm-test-feat/box"), 3)
+	testing.expect_value(t, dir_count("/tmp/ame-fm-test-feat/nope"), -1)
+	dir_counts_clear()
+
+	// path bar completion: unique → whole name + "/", shared prefix → up to the fork
+	edit_set(&app.path_edit, "/tmp/ame-fm-test-feat/box/Mu")
+	path_complete()
+	testing.expect_value(t, edit_str(&app.path_edit), "/tmp/ame-fm-test-feat/box/Music/")
+	edit_set(&app.path_edit, "/tmp/ame-fm-test-feat/box/D")
+	path_complete()
+	testing.expect_value(t, edit_str(&app.path_edit), "/tmp/ame-fm-test-feat/box/Do")
+
+	// undo of "new file" never deletes something that was written into
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-feat/box/note.txt", "important")
+	testing.expect(t, !remove_if_empty("/tmp/ame-fm-test-feat/box/note.txt"))
+	testing.expect(t, os.exists("/tmp/ame-fm-test-feat/box/note.txt"))
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-feat/box/empty.txt", "")
+	testing.expect(t, remove_if_empty("/tmp/ame-fm-test-feat/box/empty.txt"))
+}
+
+@(test)
+test_session_roundtrip :: proc(t: ^testing.T) {
+	old_xdg := os.get_env("XDG_CONFIG_HOME", context.temp_allocator)
+	posix.setenv("XDG_CONFIG_HOME", "/tmp/ame-fm-test-session", true) // never touch the user's config
+	defer {
+		if old_xdg != "" do posix.setenv("XDG_CONFIG_HOME", strings.clone_to_cstring(old_xdg, context.temp_allocator), true)
+		else do posix.unsetenv("XDG_CONFIG_HOME")
+		_ = os.remove_all("/tmp/ame-fm-test-session")
+	}
+	_ = os.make_directory_all("/tmp/ame-fm-test-session/a")
+	_ = os.make_directory_all("/tmp/ame-fm-test-session/b")
+	saved_tabs, saved_cur, saved_cwd := app.tabs, app.cur_tab, app.cwd
+	defer app.tabs, app.cur_tab, app.cwd = saved_tabs, saved_cur, saved_cwd
+	app.tabs = make([dynamic]Tab, context.temp_allocator)
+	append(&app.tabs, Tab{cwd = strings.clone("/tmp/ame-fm-test-session/a")}, Tab{cwd = strings.clone("/tmp/ame-fm-test-session/b")})
+	app.cur_tab, app.cwd = 1, strings.clone("/tmp/ame-fm-test-session/b")
+	save_session()
+	paths, cur := session_load() // what the next start reopens
+	testing.expect_value(t, len(paths), 2)
+	testing.expect_value(t, cur, 1)
+	testing.expect_value(t, paths[1], "/tmp/ame-fm-test-session/b")
+}

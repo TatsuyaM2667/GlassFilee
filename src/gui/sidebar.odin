@@ -204,7 +204,7 @@ draw_sidebar :: proc(w, H: f32) {
 	mb := Rect{w - px(40), px(6.5), px(34), px(34)}
 	if icon_button(mb, I_MENU, app.menu_open && app.menu_main) do push(.Main_Menu)
 
-	set_clip({0, hh, w, H - hh})
+	set_clip({0, hh, w, H - hh - px(52)}) // the free-space footer sits below
 	defer reset_clip()
 	y := hh + px(6)
 	nav :: proc(r: Rect, path, label: string, kind := Drop_Kind.Dir) {
@@ -247,5 +247,7 @@ draw_sidebar :: proc(w, H: f32) {
 		else do nav(r, d.path, d.label)
 	}
 	draw_sidebar_tags(&y, w)
+	reset_clip()
+	draw_free_space(w, H)
 }
 

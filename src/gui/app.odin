@@ -79,7 +79,7 @@ Act :: enum {
 	New_Tab, Close_Tab, Switch_Tab, Next_Tab, Convert, Preview, Split, Undo,
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
 	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir, Copy_Path,
-	Sort_Menu, Sort_By, Sort_Dir, Dirs_First, Group_Menu, Group_By,
+	Sort_Menu, Sort_By, Sort_Dir, Dirs_First, Group_Menu, Group_By, New_File, Select_Pattern,
 }
 
 Pending :: struct {
@@ -90,6 +90,7 @@ Pending :: struct {
 
 Dialog :: enum {
 	None, Rename, Mkdir, Compress, Confirm_Delete, Confirm_Empty_Trash, Props, Batch_Rename, Tag_Edit, Tag_Pick,
+	New_File, Select_Pattern,
 }
 
 Focus :: enum {
@@ -290,6 +291,7 @@ kind_of :: proc(name: string, mode: os.Permissions) -> Kind {
 }
 
 load :: proc(path: string) -> bool {
+	dir_counts_clear()
 	if strings.has_prefix(path, "tag:") {
 		virtual.arena_free_all(&app.listing)
 		stop_walk()
@@ -508,10 +510,12 @@ do_paste :: proc() {
 	srcs, cut := app.clip[:], app.clip_cut
 	external := false
 	if !plat_clipboard_is_ours() {
+		// someone else's clipboard: their files, or else their image / text as a new file
+		srcs, cut = nil, false
 		if ext, ext_cut, ok := plat_get_clipboard_files(); ok do srcs, cut, external = ext[:], ext_cut, true
 	}
 	if len(srcs) == 0 {
-		toastf("クリップボードは空です")
+		if !paste_as_file() do toastf("クリップボードは空です")
 		return
 	}
 	start_op(srcs, app.cwd, cut) // background, with progress + cancel
@@ -624,6 +628,8 @@ name_problem :: proc(name: string, allow := "", dir := "") -> string {
 
 dialog_ok :: proc() {
 	switch app.dialog {
+	case .New_File:       new_file_ok()
+	case .Select_Pattern: select_pattern_ok()
 	case .Rename:
 		vi := app.dialog_target
 		old := app.entries[vi].name
@@ -777,6 +783,8 @@ run_pending :: proc() {
 		case .Delete:    if len(selection()) > 0 do app.dialog = .Confirm_Delete
 		case .Restore:   do_restore()
 		case .Mkdir:     begin_mkdir()
+		case .New_File:  begin_new_file()
+		case .Select_Pattern: begin_select_pattern()
 		case .Select_All: for vi in app.view do app.entries[vi].sel = true
 		case .Terminal:  if !is_tag_view() do open_terminal()
 		case .Hidden:
@@ -896,6 +904,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 	n := len(selection())
 	if main_menu {
 		add("新しいフォルダー…", .Mkdir, "Shift+Ctrl+N", !in_trash())
+		add("新しいファイル…", .New_File, "", !in_trash() && !is_tag_view())
 		add("端末で開く", .Terminal, "", !in_trash())
 		sep()
 		add("アイコン表示", .View_Grid, "Ctrl+2")
@@ -941,8 +950,10 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("ゴミ箱を空にする", .Empty_Trash, "", len(app.view) > 0)
 	} else {
 		add("新しいフォルダー…", .Mkdir, "Shift+Ctrl+N")
+		add("新しいファイル…", .New_File)
 		add("貼り付け", .Paste, "Ctrl+V")
 		add("すべて選択", .Select_All, "Ctrl+A")
+		add("パターンで選択…", .Select_Pattern, "Ctrl+S")
 		sep()
 		add("端末で開く", .Terminal)
 		add("パスをコピー", .Copy_Path, "Shift+Ctrl+C")
@@ -1595,7 +1606,11 @@ draw_body :: proc() {
 			else if strings.contains_rune(e.name, '/') && nw < name_w - px(40) { // search hit in a subfolder
 				text(r.x + px(66) + nw, bl, ellipsize(filepath.dir(e.name), fs(12), name_w - nw - px(12), false, true), fs(12), with_alpha(FG, 110))
 			}
-			sz := "—" if e.is_dir else format_size(e.size)
+			sz := format_size(e.size)
+			if e.is_dir {
+				c := dir_count(full_path(e.name))
+				sz = "—" if c < 0 else fmt.tprintf("%d 個", c)
+			}
 			sx := r.x + r.w - date_w - px(16) - f32(text_width(sz, size))
 			text(sx, bl, sz, size, DIM)
 			text(r.x + r.w - date_w, bl, format_time(e.mtime), size, DIM)
@@ -1726,7 +1741,7 @@ draw_dialog :: proc(W, H: f32) {
 	draw_alpha = u32(p * 255)
 	defer draw_alpha = 255
 	w := min(px(400), W - px(32))
-	is_input := app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress
+	is_input := app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress || app.dialog == .New_File || app.dialog == .Select_Pattern
 	h := px(196) if is_input else px(170)
 	r := Rect{(W - w) / 2, (H - h) / 2 + (1 - p) * px(24), w, h}
 	rrect(r, px(14), POP_BG)
@@ -1748,6 +1763,15 @@ draw_dialog :: proc(W, H: f32) {
 	case .Mkdir:
 		title, ok = "新しいフォルダー", "作成"
 		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)))
+	case .New_File:
+		title, ok = "新しいファイル", "作成"
+		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)))
+	case .Select_Pattern:
+		title, ok = "パターンで選択（例: *.jpg *.png）", "選択"
+		pat := strings.trim_space(edit_str(&app.dlg_edit))
+		hits := 0
+		for vi in app.view do if pattern_matches(pat, app.entries[vi].name) do hits += 1
+		if pat != "" && hits == 0 do problem = "一致するものがありません"
 	case .Confirm_Delete:
 		if n == 1 do title = fmt.tprintf("「%s」を完全に削除しますか？", ellipsize(app.entries[selection()[0]].name, fs(14), px(200)))
 		else do title = fmt.tprintf("%d 個のアイテムを完全に削除しますか？", n)
@@ -1882,6 +1906,10 @@ on_key :: proc(ev: Ev) {
 	}
 	if e := active_edit(); e != nil {
 		if e.pre != "" do return // IME is composing
+		if key == K_TAB && app.edit_focus == .Path {
+			path_complete()
+			return
+		}
 		if edit_key(e, key, ctrl, shift) || ev.text != "" {
 			if ev.text != "" && !(ctrl && key == K_V) do edit_insert(e, ev.text)
 			if app.edit_focus == .Search do refilter()
@@ -1934,6 +1962,7 @@ on_key :: proc(ev: Ev) {
 	case ctrl && key == K_C: push(.Copy if len(selection()) > 0 else .Copy_Path) // nothing selected: the folder's path
 	case ctrl && key == K_X: push(.Cut)
 	case ctrl && key == K_V: push(.Paste)
+	case ctrl && !shift && key == K_S: push(.Select_Pattern)
 	case ctrl && shift && key == K_N: push(.Mkdir)
 	case ctrl && key == K_R: push(.Reload)
 	case ctrl && key == K_Q: push(.Close)
@@ -2125,12 +2154,13 @@ main :: proc() {
 	append(&app.tabs, Tab{})
 
 	start := app.home
+	restored := false
 	if len(os.args) > 1 {
 		start = os.args[1]
 		if strings.has_prefix(start, "file://") do start = start[7:]
 		if !os.is_dir(start) do start = filepath.dir(start)
-	}
-	if !go_to(start) do go_to(app.home)
+	} else do restored = restore_session() // last time's tabs
+	if !restored && !go_to(start) do go_to(app.home)
 	dump_path := os.get_env("GF_DUMP", context.allocator)
 	watch_init()
 	load_rules()
@@ -2246,6 +2276,7 @@ main :: proc() {
 		}
 		remove_range(&events, 0, n)
 	}
+	if dump_path == "" do save_session()
 	// leave nothing running behind
 	music_stop()
 	for op in ops do sync.atomic_store(&op.prog.cancel, true)

@@ -137,6 +137,7 @@ K_N :: 'n'
 K_Q :: 'q'
 K_R :: 'r'
 K_V :: 'v'
+K_S :: 's'
 K_W :: 'w'
 K_X :: 'x'
 K_Z :: 'z'
@@ -694,6 +695,7 @@ on_offer :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_
 		case "text/plain;charset=utf-8":     w.offer_mimes[target] |= 4
 		case "UTF8_STRING":                  w.offer_mimes[target] |= 8
 		case "text/plain":                   w.offer_mimes[target] |= 16
+		case "image/png":                    w.offer_mimes[target] |= 32
 		}
 	}
 	if op == 2 && target == w.dnd_offer do w.dnd_action = a[0].u // action chosen by the compositor (modifiers)
@@ -1116,4 +1118,10 @@ plat_cursor_text :: proc(on: bool) {
 	if shape == max(w.cursor_shape, 1) do return
 	w.cursor_shape = shape
 	if w.cs_mgr != nil && w.enter_serial != 0 do set_cursor(w.enter_serial)
+}
+
+// A PNG another app put on the clipboard (screenshots, copied images); nil if none.
+plat_get_clipboard_image :: proc() -> []u8 {
+	if w.source != nil || w.sel_offer == nil || w.offer_mimes[w.sel_offer] & 32 == 0 do return nil
+	return receive_mime(w.sel_offer, "image/png")
 }

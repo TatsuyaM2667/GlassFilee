@@ -235,10 +235,17 @@ do_undo :: proc() {
 		case .Copy:
 			if gf.trash_path(pr[1]) != .Success do failed += 1 // to the trash, not gone forever
 		case .Mkdir:
-			if os.remove(pr[1]) != nil do failed += 1 // only if still empty
+			if !remove_if_empty(pr[1]) do failed += 1
 		}
 	}
 	reload()
 	if failed > 0 do toastf("%d 個は元に戻せませんでした", failed)
 	else do toastf("元に戻しました")
+}
+
+// Undo of "new folder / new file": removes it only while still empty, never anything written into.
+remove_if_empty :: proc(path: string) -> bool {
+	fi, err := os.stat(path, context.temp_allocator)
+	if err != nil || (fi.type != .Directory && fi.size > 0) do return false
+	return os.remove(path) == nil // a folder only goes when empty
 }
