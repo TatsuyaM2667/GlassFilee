@@ -176,6 +176,7 @@ App :: struct {
 	group:             Group_By,
 	now, dt, last_t:   f32,
 	animating:         bool, // something is still moving: keep drawing frames
+	text_cursor:       bool, // pointer is over a text field this frame
 	menu_t0, dlg_t0:   f32,
 	toast_t0:          f32,
 	prev_dialog:       Dialog,
@@ -1071,6 +1072,7 @@ active_edit :: proc() -> ^Edit {
 }
 
 draw_edit :: proc(e: ^Edit, r: Rect, focused: bool, icon: rune = 0) {
+	if hovering(r) do app.text_cursor = true
 	rrect(r, px(6), hex(0xffffff, 18))
 	if focused do rrect(r, px(6), with_alpha(ACCENT, 210), px(2))
 	size := fs(14)
@@ -1232,6 +1234,8 @@ ensure_visible :: proc(k: int) {
 }
 
 frame :: proc() {
+	defer plat_cursor_text(app.text_cursor)
+	app.text_cursor = false
 	W, H := f32(cv.w), f32(cv.h)
 	frame_no += 1
 	t := now_s()
@@ -1990,6 +1994,11 @@ on_event :: proc(ev: Ev) -> bool {
 	case .Down:
 		app.mx, app.my = ev.x * app.S, ev.y * app.S
 		if ev.button == 1 && window_grab(app.mx, app.my) do return false
+		if ev.button == 8 || ev.button == 9 { // mouse side buttons, as in every file manager
+			if app.blocked || app.menu_open || app.dialog != .None do return false
+			push(.Back if ev.button == 8 else .Forward)
+			return true
+		}
 		app.pressed, app.held = true, true
 		app.button, app.clicks = ev.button, ev.clicks
 		if app.edit_focus == .Path && app.my > app.header_h do app.edit_focus = .None

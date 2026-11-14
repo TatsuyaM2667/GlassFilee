@@ -182,7 +182,10 @@ W :: struct {
 	ti_mgr, ti:                                   Proxy,
 	surface, xsurface, toplevel:                  Proxy,
 	pointer, keyboard:                            Proxy,
-	cursor_theme:                                 rawptr,
+	cursor_theme:                                 rawptr, // only without wp_cursor_shape (the compositor draws named cursors itself)
+	cs_mgr, cs_dev:                               Proxy,
+	cursor_shape:                                 u32, // wp_cursor_shape_device_v1 shape: 1 default, 9 text
+	enter_serial:                                 u32,
 	cursor_surface:                               Proxy,
 	xkb_ctx, keymap, xkb_state:                   rawptr,
 	mods:                                         Mods,
@@ -245,6 +248,9 @@ ticks_ms :: proc() -> i64 {
 @(private = "file") null_types: [8]^wl_interface
 @(private = "file") xdg_wm_base_iface, xdg_surface_iface, xdg_toplevel_iface, xdg_positioner_iface, xdg_popup_iface: wl_interface
 @(private = "file") ti_mgr_iface, ti_iface: wl_interface
+@(private = "file") cs_mgr_iface, cs_dev_iface: wl_interface
+@(private = "file") cs_mgr_req: [3]wl_message
+@(private = "file") cs_dev_req: [2]wl_message
 @(private = "file") wm_req: [4]wl_message
 @(private = "file") wm_ev: [1]wl_message
 @(private = "file") xs_req: [5]wl_message
@@ -289,6 +295,10 @@ init_ifaces :: proc() {
 	iface(&xdg_popup_iface, "xdg_popup", nil, nil)
 	iface(&ti_mgr_iface, "zwp_text_input_manager_v3", tim_req[:], nil)
 	iface(&ti_iface, "zwp_text_input_v3", ti_req[:], ti_ev[:])
+	msgs(cs_mgr_req[:], {"destroy:", "get_pointer:no", "get_tablet_tool_v2:no"})
+	msgs(cs_dev_req[:], {"destroy:", "set_shape:uu"})
+	iface(&cs_mgr_iface, "wp_cursor_shape_manager_v1", cs_mgr_req[:], nil)
+	iface(&cs_dev_iface, "wp_cursor_shape_device_v1", cs_dev_req[:], nil)
 }
 
 @(private = "file")
@@ -322,6 +332,8 @@ on_registry :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]
 		listen(w.wm, on_wm)
 	case "zwp_text_input_manager_v3":
 		w.ti_mgr = bind(name, &ti_mgr_iface, 1)
+	case "wp_cursor_shape_manager_v1":
+		w.cs_mgr = bind(name, &cs_mgr_iface, 1)
 	case "wl_data_device_manager":
 		w.ddm = bind(name, &wl_data_device_manager_interface, min(v, 3))
 	}
@@ -398,6 +410,11 @@ on_seat :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]wl_a
 
 @(private = "file")
 set_cursor :: proc(serial: u32) {
+	if w.cs_mgr != nil && w.pointer != nil {
+		if w.cs_dev == nil do w.cs_dev = wl_proxy_marshal_flags(w.cs_mgr, 1, &cs_dev_iface, 1, 0, rawptr(nil), w.pointer)
+		wl_proxy_marshal_flags(w.cs_dev, 1, nil, 1, 0, serial, max(w.cursor_shape, 1))
+		return
+	}
 	if w.cursor_theme == nil || w.pointer == nil do return
 	cur := wl_cursor_theme_get_cursor(w.cursor_theme, "default")
 	if cur == nil do cur = wl_cursor_theme_get_cursor(w.cursor_theme, "left_ptr")
@@ -420,6 +437,7 @@ on_pointer :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]w
 	switch op {
 	case 0: // enter
 		w.px, w.py = f32(a[2].i) / 256, f32(a[3].i) / 256
+		w.enter_serial = a[0].u
 		set_cursor(a[0].u)
 		append(&events, Ev{kind = .Motion, x = w.px, y = w.py, mods = w.mods})
 	case 1: // leave
@@ -434,6 +452,8 @@ on_pointer :: proc "c" (impl, target: rawptr, op: u32, msg: ^wl_message, a: [^]w
 		case 0x110: btn = 1
 		case 0x111: btn = 3
 		case 0x112: btn = 2
+		case 0x113: btn = 8 // side (back)
+		case 0x114: btn = 9 // extra (forward)
 		case: return 0
 		}
 		if a[3].u == 1 {
@@ -593,7 +613,7 @@ plat_init :: proc(title, app_id: string, width, height: i32) -> bool {
 	if s := posix.getenv("XCURSOR_SIZE"); s != nil {
 		if v := c.int(libc_atoi(s)); v > 0 do size = v
 	}
-	w.cursor_theme = wl_cursor_theme_load(posix.getenv("XCURSOR_THEME"), size, w.shm)
+	if w.cs_mgr == nil do w.cursor_theme = wl_cursor_theme_load(posix.getenv("XCURSOR_THEME"), size, w.shm)
 	if w.ddm != nil && w.seat != nil {
 		w.ddev = wl_proxy_marshal_flags(w.ddm, 1, &wl_data_device_interface, ver(w.ddm), 0, rawptr(nil), w.seat)
 		listen(w.ddev, on_data_device)
@@ -1008,6 +1028,7 @@ plat_present :: proc(b: ^Shm_Buf) {
 	b.busy = true
 }
 
+
 plat_move :: proc() {
 	if w.seat != nil do wl_proxy_marshal_flags(w.toplevel, 5, nil, 1, 0, w.seat, w.serial)
 }
@@ -1087,4 +1108,12 @@ plat_error :: proc() -> (errno: int, iface: string, id: u32, code: u32) {
 	code = wl_display_get_protocol_error(w.display, &ip, &id)
 	if ip != nil do iface = string(ip.name)
 	return
+}
+
+// I-beam over text fields, arrow elsewhere (only where the compositor draws cursors).
+plat_cursor_text :: proc(on: bool) {
+	shape := u32(9 if on else 1)
+	if shape == max(w.cursor_shape, 1) do return
+	w.cursor_shape = shape
+	if w.cs_mgr != nil && w.enter_serial != 0 do set_cursor(w.enter_serial)
 }
